@@ -74,16 +74,23 @@ Flyway uses CRC32 of the **normalized** migration file contents. Normalization r
 
 We must replicate this exactly so checksums match the reference database.
 
-### Placeholder Substitution
+### Placeholder Substitution (Smarter than Flyway)
 
-Flyway supports placeholder variables in migration SQL. The MJ project uses:
+Flyway supports placeholder variables in migration SQL, but has a critical flaw: it treats **every** `${...}` occurrence as a placeholder, which corrupts JavaScript template literals and other code embedded in SQL strings. For example, a stored procedure containing `${myVar}` in a JS code string will cause Flyway to error or corrupt the value.
+
+**Skyway's approach**: Only substitute **known placeholders** — specifically those matching the `${flyway:...}` prefix pattern or explicitly registered user placeholders. All other `${...}` patterns are left untouched.
+
+The MJ project uses these Flyway-namespace placeholders:
 
 | Placeholder | Purpose |
 |-------------|---------|
 | `${flyway:defaultSchema}` | Replaced with the configured default schema (e.g., `__mj`) |
 | `${flyway:timestamp}` | Replaced with current timestamp (forces repeatable migration re-execution) |
 
-Skyway must support configurable placeholders with the same `${name}` syntax.
+**Rules:**
+1. `${flyway:*}` — always substituted (built-in Flyway placeholders)
+2. `${user_defined_name}` — only substituted if explicitly registered in the `placeholders` config
+3. All other `${...}` patterns — **left as-is** (this is a key improvement over Flyway)
 
 ---
 
@@ -286,6 +293,22 @@ const validation = await skyway.validate();
 // Clean database (dangerous!)
 await skyway.clean();
 ```
+
+---
+
+### Large String Handling (NVARCHAR(MAX) Support)
+
+Flyway has a known limitation: strings longer than 4000 characters get truncated or corrupted during migration execution. This is because the JDBC driver and Flyway's internal handling don't properly manage `NVARCHAR(MAX)` data in all cases.
+
+**Skyway's approach**: Use the **DECLARE/SET/EXEC pattern** proven in MemberJunction's `SQLServerDataProvider`. Instead of embedding large string literals directly in SQL command text (which hits the 4000-char NVARCHAR limit), we:
+
+1. **DECLARE** a T-SQL variable as `NVARCHAR(MAX)` — can hold up to 2GB
+2. **SET** the variable to the large string value
+3. **EXEC** the stored procedure referencing the variable, not the literal
+
+This technique is critical for migrations that insert or update rows with large text fields (e.g., JavaScript code, HTML templates, JSON blobs, stored procedure definitions). Since Skyway uses the `mssql` Node.js driver directly (not JDBC), we can also leverage parameterized queries with proper `sql.NVarChar(sql.MAX)` type declarations to ensure no truncation occurs at the driver level.
+
+**Implementation**: When executing SQL batches, the `mssql` driver's `request.input()` method with explicit `sql.NVarChar(sql.MAX)` typing ensures strings of any length are transmitted intact. For raw SQL in migration files, the GO-splitter and batch executor preserve full string content without any intermediate truncation.
 
 ---
 

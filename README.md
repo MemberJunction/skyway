@@ -156,6 +156,27 @@ Skyway aims for compatibility with Flyway's behavior and artifacts:
 | Transaction wrapping | Supported (per-migration or per-run) |
 | Out-of-order migrations | Configurable |
 
+## Improvements Over Flyway
+
+Skyway isn't just a clone — it fixes two significant pain points with Flyway:
+
+### Smart Placeholder Handling
+
+Flyway treats **every** `${...}` occurrence as a placeholder, which breaks migration files containing JavaScript template literals, embedded code, or other uses of the `${...}` syntax. If your SQL migration inserts a stored procedure body containing `${myVar}`, Flyway will either error out or silently corrupt the value.
+
+Skyway only substitutes **known placeholders**:
+- `${flyway:defaultSchema}`, `${flyway:timestamp}`, and other `${flyway:*}` built-in placeholders are always substituted
+- User-defined placeholders registered in the `placeholders` config are substituted
+- All other `${...}` patterns are **left untouched**
+
+This means migrations containing JavaScript code, JSON templates, or any other `${...}` syntax work correctly without escaping or workarounds.
+
+### Large String Support (No 4000-Character Truncation)
+
+Flyway's JDBC-based execution can truncate or corrupt strings longer than 4000 characters — a known limitation when working with `NVARCHAR(MAX)` columns. This is problematic for migrations that insert large text values (code, HTML, JSON blobs, etc.).
+
+Skyway uses the `mssql` (tedious) driver with explicit `NVARCHAR(MAX)` type declarations, ensuring strings of any length are transmitted to SQL Server intact. No truncation, no corruption, regardless of string size.
+
 ## SQL Server Transaction Support
 
 Unlike MySQL or PostgreSQL, SQL Server supports transactional DDL — `CREATE TABLE`, `ALTER TABLE`, and most schema changes can be rolled back within a transaction. Skyway takes advantage of this to provide atomic migration execution: if any statement in a migration fails, the entire migration is rolled back.
