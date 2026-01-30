@@ -19,12 +19,15 @@ import { MigrationParseError } from '../core/errors';
 /**
  * Regex for versioned (`V`) and baseline (`B`) migration filenames.
  *
+ * Flyway treats the version as everything between the prefix and the
+ * FIRST double-underscore. The version is purely numeric (digits only).
+ *
  * Groups:
  *  1. Prefix character (`V` or `B`, case-insensitive)
- *  2. Version string (digits, dots, underscores before the double-underscore)
+ *  2. Version string (digits only — the numeric timestamp)
  *  3. Description (everything between `__` and `.sql`)
  */
-const VERSIONED_PATTERN = /^([VvBb])(\d[\w.]*)__(.+)\.sql$/;
+const VERSIONED_PATTERN = /^([VvBb])(\d+)__(.+)\.sql$/;
 
 /**
  * Regex for repeatable (`R__`) migration filenames.

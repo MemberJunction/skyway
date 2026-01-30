@@ -548,7 +548,7 @@ export class Skyway {
   ): Promise<MigrationExecutionResult> {
     const { SubstitutePlaceholders } = await import('../executor/placeholder');
     const { SplitOnGO } = await import('../executor/sql-splitter');
-    const { MigrationExecutionError } = await import('./errors');
+    const { ComputeChecksum } = await import('../migration/checksum');
 
     const startTime = Date.now();
 
@@ -563,6 +563,14 @@ export class Skyway {
         this.config.Placeholders,
         context
       );
+
+      // Flyway computes repeatable migration checksums AFTER placeholder substitution.
+      // This causes ${flyway:timestamp} to produce a new checksum each run,
+      // ensuring repeatable migrations always re-execute.
+      // Versioned/baseline migrations use the raw content checksum.
+      if (migration.Type === 'repeatable') {
+        migration.Checksum = ComputeChecksum(processedSQL);
+      }
 
       // Split on GO
       const batches = SplitOnGO(processedSQL);
