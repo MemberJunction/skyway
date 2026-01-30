@@ -255,6 +255,76 @@ export class HistoryTable {
   }
 
   /**
+   * Inserts a baseline record into the history table.
+   *
+   * @param version - The version to baseline at
+   * @param user - Database user who performed the baseline
+   * @param connectionSource - Transaction or pool to execute against
+   */
+  async InsertBaseline(
+    version: string,
+    user: string,
+    connectionSource?: sql.Transaction
+  ): Promise<void> {
+    const nextRank = await this.GetNextRank(connectionSource);
+    const request = this.createRequest(connectionSource);
+    request.input('installedRank', sql.Int, nextRank);
+    request.input('version', sql.NVarChar(50), version);
+    request.input('description', sql.NVarChar(200), '<< Flyway Baseline >>');
+    request.input('type', sql.NVarChar(20), 'BASELINE');
+    request.input('script', sql.NVarChar(1000), '<< Flyway Baseline >>');
+    request.input('installedBy', sql.NVarChar(100), user);
+    request.input('executionTime', sql.Int, 0);
+    request.input('success', sql.Bit, true);
+
+    await request.query(`
+      INSERT INTO ${this.QualifiedName}
+        ([installed_rank], [version], [description], [type], [script],
+         [checksum], [installed_by], [execution_time], [success])
+      VALUES
+        (@installedRank, @version, @description, @type, @script,
+         NULL, @installedBy, @executionTime, @success)
+    `);
+  }
+
+  /**
+   * Deletes a record from the history table by installed_rank.
+   *
+   * @param installedRank - The rank of the record to delete
+   * @param connectionSource - Transaction or pool to execute against
+   */
+  async DeleteRecord(
+    installedRank: number,
+    connectionSource?: sql.Transaction
+  ): Promise<void> {
+    const request = this.createRequest(connectionSource);
+    request.input('rank', sql.Int, installedRank);
+    await request.query(
+      `DELETE FROM ${this.QualifiedName} WHERE [installed_rank] = @rank`
+    );
+  }
+
+  /**
+   * Updates the checksum of a record in the history table.
+   *
+   * @param installedRank - The rank of the record to update
+   * @param newChecksum - The new checksum value
+   * @param connectionSource - Transaction or pool to execute against
+   */
+  async UpdateChecksum(
+    installedRank: number,
+    newChecksum: number,
+    connectionSource?: sql.Transaction
+  ): Promise<void> {
+    const request = this.createRequest(connectionSource);
+    request.input('rank', sql.Int, installedRank);
+    request.input('checksum', sql.Int, newChecksum);
+    await request.query(
+      `UPDATE ${this.QualifiedName} SET [checksum] = @checksum WHERE [installed_rank] = @rank`
+    );
+  }
+
+  /**
    * Maps a migration type to the Flyway history record type string.
    */
   private resolveHistoryType(migration: ResolvedMigration): HistoryRecordType {

@@ -12,3 +12,6 @@ export { LoadConfig, CLIOptions } from './config-loader';
 export { RunMigrate } from './commands/migrate';
 export { RunInfo } from './commands/info';
 export { RunValidate } from './commands/validate';
+export { RunClean } from './commands/clean';
+export { RunBaseline } from './commands/baseline';
+export { RunRepair } from './commands/repair';

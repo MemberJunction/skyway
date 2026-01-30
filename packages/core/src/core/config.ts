@@ -50,6 +50,12 @@ export interface SkywayConfig {
    * Defaults to `'per-run'` (all-or-nothing).
    */
   TransactionMode?: TransactionMode;
+
+  /**
+   * When true, Migrate() will log pending migrations without executing them.
+   * Defaults to false.
+   */
+  DryRun?: boolean;
 }
 
 /**
@@ -123,5 +129,6 @@ export function resolveConfig(config: SkywayConfig): Required<SkywayConfig> & { 
     },
     Placeholders: config.Placeholders ?? {},
     TransactionMode: config.TransactionMode ?? 'per-run',
+    DryRun: config.DryRun ?? false,
   };
 }

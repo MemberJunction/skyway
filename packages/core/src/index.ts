@@ -34,7 +34,7 @@
  */
 
 // ─── Main API ────────────────────────────────────────────────────────
-export { Skyway, MigrateResult, ValidateResult, SkywayCallbacks } from './core/skyway';
+export { Skyway, MigrateResult, ValidateResult, CleanResult, BaselineResult, RepairResult, SkywayCallbacks } from './core/skyway';
 
 // ─── Configuration ───────────────────────────────────────────────────
 export { SkywayConfig, MigrationConfig, TransactionMode } from './core/config';

@@ -19,45 +19,61 @@ Flyway is the gold standard for database migrations, but it requires a Java runt
 ### As a Library
 
 ```typescript
-import { Skyway } from 'skyway';
+import { Skyway } from '@skyway/core';
 
 const skyway = new Skyway({
-    database: {
-        server: 'localhost',
-        database: 'my_app',
-        user: 'sa',
-        password: 'secret',
+    Database: {
+        Server: 'localhost',
+        Database: 'my_app',
+        User: 'sa',
+        Password: 'secret',
     },
-    migrations: {
-        locations: ['./migrations'],
-        defaultSchema: 'dbo',
-        baselineOnMigrate: true,
+    Migrations: {
+        Locations: ['./migrations'],
+        DefaultSchema: 'dbo',
+        BaselineOnMigrate: true,
     },
-    placeholders: {
+    Placeholders: {
         'flyway:defaultSchema': 'dbo',
     },
+    TransactionMode: 'per-run',
 });
 
 // Apply pending migrations
-const result = await skyway.migrate();
-console.log(`Applied ${result.migrationsApplied} migrations`);
+const result = await skyway.Migrate();
+console.log(`Applied ${result.MigrationsApplied} migrations`);
 
 // Check migration status
-const info = await skyway.info();
-info.forEach(m => console.log(`${m.version} [${m.state}] ${m.description}`));
+const info = await skyway.Info();
+info.forEach(m => console.log(`${m.Version} [${m.State}] ${m.Description}`));
 
 // Validate checksums
-const validation = await skyway.validate();
-if (!validation.valid) {
-    console.error('Checksum mismatch detected:', validation.errors);
+const validation = await skyway.Validate();
+if (!validation.Valid) {
+    console.error('Checksum mismatch detected:', validation.Errors);
 }
+
+// Baseline the database at a version
+await skyway.Baseline('202601122300');
+
+// Repair history table (remove failed entries, realign checksums)
+await skyway.Repair();
+
+// Clean all objects from the schema
+await skyway.Clean();
+
+// Create or drop the database
+await skyway.CreateDatabase();
+await skyway.DropDatabase();
+
+await skyway.Close();
 ```
 
 ### As a CLI
 
 ```bash
 # Apply pending migrations
-skyway migrate --url sql://localhost/my_app --user sa --locations ./migrations
+skyway migrate --server localhost --database my_app --user sa --password secret --locations ./migrations
 
 # Show migration status
 skyway info
@@ -65,37 +81,50 @@ skyway info
 # Validate applied migrations against local files
 skyway validate
 
-# Clean database (remove all objects)
+# Clean database (drop all objects in the schema)
 skyway clean
 
-# Baseline an existing database
-skyway baseline --version 202601122300
+# Baseline an existing database at a version
+skyway baseline --baseline-version 202601122300
+
+# Repair history table
+skyway repair
+
+# Create or drop the database
+skyway create-db
+skyway drop-db
+
+# Dry-run mode (show what would be applied without executing)
+skyway migrate --dry-run
+
+# Quiet mode (suppress per-migration output)
+skyway migrate --quiet
 ```
 
 ### Configuration File
 
-Create a `skyway.json` in your project root:
+Create a `skyway.json` in your project root. Both camelCase and PascalCase keys are supported:
 
 ```json
 {
-    "database": {
-        "server": "localhost",
-        "port": 1433,
-        "database": "my_app",
-        "user": "sa",
-        "password": "${SQL_PASSWORD}"
+    "Database": {
+        "Server": "localhost",
+        "Port": 1433,
+        "Database": "my_app",
+        "User": "sa",
+        "Password": "${SQL_PASSWORD}"
     },
-    "migrations": {
-        "locations": ["./migrations"],
-        "defaultSchema": "dbo",
-        "historyTable": "flyway_schema_history",
-        "baselineOnMigrate": true,
-        "baselineVersion": "1"
+    "Migrations": {
+        "Locations": ["./migrations"],
+        "DefaultSchema": "dbo",
+        "HistoryTable": "flyway_schema_history",
+        "BaselineOnMigrate": true,
+        "BaselineVersion": "1"
     },
-    "placeholders": {
+    "Placeholders": {
         "flyway:defaultSchema": "dbo"
     },
-    "transactionMode": "per-migration"
+    "TransactionMode": "per-migration"
 }
 ```
 
@@ -151,10 +180,49 @@ Skyway aims for compatibility with Flyway's behavior and artifacts:
 | Versioned migrations (`V`) | Supported |
 | Baseline migrations (`B`) | Supported |
 | Repeatable migrations (`R__`) | Supported |
-| Placeholder substitution (`${...}`) | Supported |
+| Placeholder substitution (`${...}`) | Supported (smart — only known placeholders) |
 | GO batch separator handling | Supported |
 | Transaction wrapping | Supported (per-migration or per-run) |
 | Out-of-order migrations | Configurable |
+| `clean` command | Supported |
+| `baseline` command | Supported |
+| `repair` command | Supported |
+| `info` command | Supported |
+| `validate` command | Supported |
+| Dry-run mode | Supported (`--dry-run`) |
+
+## CLI Commands
+
+| Command | Description |
+|---------|-------------|
+| `skyway migrate` | Apply pending migrations |
+| `skyway info` | Show migration status |
+| `skyway validate` | Validate applied migration checksums |
+| `skyway clean` | Drop all objects in the configured schema |
+| `skyway baseline` | Baseline the database at a version |
+| `skyway repair` | Remove failed entries and realign checksums |
+| `skyway create-db` | Create the target database |
+| `skyway drop-db` | Drop the target database |
+
+### CLI Flags
+
+| Flag | Description |
+|------|-------------|
+| `-s, --server <host>` | SQL Server hostname |
+| `-p, --port <port>` | SQL Server port |
+| `-d, --database <name>` | Database name |
+| `-u, --user <user>` | Database user |
+| `-P, --password <pass>` | Database password |
+| `-l, --locations <paths>` | Migration locations (comma-separated) |
+| `--schema <schema>` | Default schema name |
+| `--table <table>` | History table name |
+| `--baseline-version <ver>` | Baseline version |
+| `--baseline-on-migrate` | Auto-baseline on empty database |
+| `--transaction-mode <mode>` | `per-run` (default) or `per-migration` |
+| `--dry-run` | Show pending migrations without executing |
+| `-q, --quiet` | Suppress per-migration output |
+| `--config <path>` | Path to config file |
+| `--placeholder <key=value>` | Set a placeholder (repeatable) |
 
 ## Improvements Over Flyway
 
@@ -248,7 +316,7 @@ Flyway treats **every** `${...}` occurrence as a placeholder, which breaks migra
 
 Skyway only substitutes **known placeholders**:
 - `${flyway:defaultSchema}`, `${flyway:timestamp}`, and other `${flyway:*}` built-in placeholders are always substituted
-- User-defined placeholders registered in the `placeholders` config are substituted
+- User-defined placeholders registered in the `Placeholders` config are substituted
 - All other `${...}` patterns are **left untouched**
 
 This means migrations containing JavaScript code, JSON templates, or any other `${...}` syntax work correctly without escaping or workarounds.

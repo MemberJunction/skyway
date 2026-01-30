@@ -100,6 +100,52 @@ export function LogError(message: string): void {
 }
 
 /**
+ * Prints a summary banner after a migrate operation.
+ */
+export function PrintMigrateSummary(
+  applied: number,
+  totalMs: number,
+  currentVersion: string | null,
+  success: boolean,
+  errorMessage?: string
+): void {
+  console.log();
+  console.log(chalk.gray('  ' + '─'.repeat(50)));
+
+  if (success) {
+    console.log(
+      chalk.green.bold('  SUCCESS') +
+      chalk.gray(` — ${applied} migration(s) applied in ${formatElapsed(totalMs)}`)
+    );
+    if (currentVersion) {
+      console.log(chalk.gray(`  Current version: `) + chalk.white(currentVersion));
+    }
+  } else {
+    console.log(
+      chalk.red.bold('  FAILED') +
+      chalk.gray(` — ${applied} migration(s) applied before failure`)
+    );
+    if (errorMessage) {
+      console.log(chalk.red(`  ${errorMessage}`));
+    }
+  }
+
+  console.log(chalk.gray('  ' + '─'.repeat(50)));
+  console.log();
+}
+
+/**
+ * Formats elapsed time in a human-readable way.
+ */
+export function formatElapsed(ms: number): string {
+  if (ms < 1000) {
+    return `${ms}ms`;
+  }
+  const seconds = (ms / 1000).toFixed(1);
+  return `${seconds}s`;
+}
+
+/**
  * Returns a chalk color function for a migration state.
  */
 function getStateColor(state: MigrationState): chalk.Chalk {

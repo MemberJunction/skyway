@@ -17,6 +17,9 @@ import { PrintBanner, LogInfo, LogSuccess, LogError } from '../formatting';
 import { RunMigrate } from '../commands/migrate';
 import { RunInfo } from '../commands/info';
 import { RunValidate } from '../commands/validate';
+import { RunClean } from '../commands/clean';
+import { RunBaseline } from '../commands/baseline';
+import { RunRepair } from '../commands/repair';
 import { Skyway } from '@skyway/core';
 
 const program = new Command();
@@ -43,7 +46,9 @@ function addSharedOptions(cmd: Command): Command {
     .option('--transaction-mode <mode>', 'Transaction mode: per-run or per-migration')
     .option('--trust-server-certificate', 'Trust self-signed certificates')
     .option('--config <path>', 'Path to config file')
-    .option('--placeholder <key=value>', 'Set a placeholder (repeatable)', collect, []);
+    .option('--placeholder <key=value>', 'Set a placeholder (repeatable)', collect, [])
+    .option('--dry-run', 'Show pending migrations without executing them')
+    .option('-q, --quiet', 'Suppress per-migration output, show summary only');
 }
 
 // ─── Commands ───────────────────────────────────────────────────────
@@ -55,7 +60,7 @@ addSharedOptions(
 ).action(async (opts) => {
   PrintBanner();
   const config = LoadConfig(mapOptions(opts));
-  const success = await RunMigrate(config);
+  const success = await RunMigrate(config, opts.quiet ?? false);
   process.exit(success ? 0 : 1);
 });
 
@@ -78,6 +83,40 @@ addSharedOptions(
   PrintBanner();
   const config = LoadConfig(mapOptions(opts));
   const success = await RunValidate(config);
+  process.exit(success ? 0 : 1);
+});
+
+addSharedOptions(
+  program
+    .command('clean')
+    .description('Drop all objects in the configured schema (DESTRUCTIVE!)')
+).action(async (opts) => {
+  PrintBanner();
+  const config = LoadConfig(mapOptions(opts));
+  const success = await RunClean(config);
+  process.exit(success ? 0 : 1);
+});
+
+addSharedOptions(
+  program
+    .command('baseline')
+    .description('Baseline the database at a specific version')
+    .option('--baseline-version <version>', 'Version to baseline at')
+).action(async (opts) => {
+  PrintBanner();
+  const config = LoadConfig(mapOptions(opts));
+  const success = await RunBaseline(config, opts.baselineVersion);
+  process.exit(success ? 0 : 1);
+});
+
+addSharedOptions(
+  program
+    .command('repair')
+    .description('Repair the schema history table (remove failed entries, realign checksums)')
+).action(async (opts) => {
+  PrintBanner();
+  const config = LoadConfig(mapOptions(opts));
+  const success = await RunRepair(config);
   process.exit(success ? 0 : 1);
 });
 
@@ -144,6 +183,7 @@ function mapOptions(opts: Record<string, unknown>): CLIOptions {
     TrustServerCertificate: opts.trustServerCertificate as boolean | undefined,
     Config: opts.config as string | undefined,
     Placeholders: opts.placeholder as string[] | undefined,
+    DryRun: opts.dryRun as boolean | undefined,
   };
 }
 

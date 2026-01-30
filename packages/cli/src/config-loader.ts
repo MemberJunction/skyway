@@ -69,6 +69,9 @@ export interface CLIOptions {
 
   /** Placeholders in key=value format */
   Placeholders?: string[];
+
+  /** Dry-run mode */
+  DryRun?: boolean;
 }
 
 /**
@@ -177,6 +180,7 @@ export function LoadConfig(cliOptions: CLIOptions, cwd: string = process.cwd()):
     TransactionMode: (cliOptions.TransactionMode as 'per-run' | 'per-migration')
       ?? fileConfig?.TransactionMode
       ?? 'per-run',
+    DryRun: cliOptions.DryRun ?? fileConfig?.DryRun ?? false,
   };
 }
 
@@ -210,10 +214,67 @@ function loadConfigFile(
  * Loads a single config file (JSON or JS).
  */
 function loadFile(filePath: string): Partial<SkywayConfig> {
+  let raw: any;
   if (filePath.endsWith('.json')) {
     const content = fs.readFileSync(filePath, 'utf-8');
-    return JSON.parse(content);
+    raw = JSON.parse(content);
+  } else {
+    // JS/CJS files
+    raw = require(filePath);
   }
-  // JS/CJS files
-  return require(filePath);
+  return normalizeConfigKeys(raw);
+}
+
+/**
+ * Known config key mappings from camelCase to PascalCase.
+ * Supports both casings in JSON config files.
+ */
+const KEY_MAP: Record<string, string> = {
+  database: 'Database',
+  server: 'Server',
+  port: 'Port',
+  user: 'User',
+  password: 'Password',
+  options: 'Options',
+  encrypt: 'Encrypt',
+  trustServerCertificate: 'TrustServerCertificate',
+  enableArithAbort: 'EnableArithAbort',
+  requestTimeout: 'RequestTimeout',
+  connectionTimeout: 'ConnectionTimeout',
+  migrations: 'Migrations',
+  locations: 'Locations',
+  defaultSchema: 'DefaultSchema',
+  historyTable: 'HistoryTable',
+  baselineVersion: 'BaselineVersion',
+  baselineOnMigrate: 'BaselineOnMigrate',
+  outOfOrder: 'OutOfOrder',
+  placeholders: 'Placeholders',
+  transactionMode: 'TransactionMode',
+  dryRun: 'DryRun',
+};
+
+/**
+ * Recursively normalizes config object keys from camelCase to PascalCase.
+ * Keys already in PascalCase are left unchanged. Unknown keys are preserved as-is
+ * (important for user-defined placeholder names).
+ */
+function normalizeConfigKeys(obj: any): any {
+  if (obj === null || obj === undefined || typeof obj !== 'object') {
+    return obj;
+  }
+  if (Array.isArray(obj)) {
+    return obj.map(normalizeConfigKeys);
+  }
+  const normalized: Record<string, any> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    const mappedKey = KEY_MAP[key] ?? key;
+    // Recursively normalize nested objects, but skip Placeholders values
+    // (placeholder keys are user-defined and should not be normalized)
+    if (mappedKey === 'Placeholders' && typeof value === 'object' && value !== null) {
+      normalized[mappedKey] = value;
+    } else {
+      normalized[mappedKey] = normalizeConfigKeys(value);
+    }
+  }
+  return normalized;
 }

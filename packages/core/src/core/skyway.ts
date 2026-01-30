@@ -58,6 +58,57 @@ export interface MigrateResult {
 }
 
 /**
+ * Result of a `Clean()` operation.
+ */
+export interface CleanResult {
+  /** Whether the clean completed successfully */
+  Success: boolean;
+
+  /** Number of objects dropped */
+  ObjectsDropped: number;
+
+  /** Details of what was dropped */
+  DroppedObjects: string[];
+
+  /** Error message if clean failed */
+  ErrorMessage?: string;
+}
+
+/**
+ * Result of a `Baseline()` operation.
+ */
+export interface BaselineResult {
+  /** Whether the baseline completed successfully */
+  Success: boolean;
+
+  /** The version that was baselined */
+  BaselineVersion: string;
+
+  /** Error message if baseline failed */
+  ErrorMessage?: string;
+}
+
+/**
+ * Result of a `Repair()` operation.
+ */
+export interface RepairResult {
+  /** Whether the repair completed successfully */
+  Success: boolean;
+
+  /** Number of failed entries removed */
+  FailedEntriesRemoved: number;
+
+  /** Number of checksums realigned */
+  ChecksumsRealigned: number;
+
+  /** Details of repairs made */
+  RepairDetails: string[];
+
+  /** Error message if repair failed */
+  ErrorMessage?: string;
+}
+
+/**
  * Result of a `Validate()` operation.
  */
 export interface ValidateResult {
@@ -192,6 +243,23 @@ export class Skyway {
       this.callbacks.OnLog?.(
         `${resolution.PendingMigrations.length} migration(s) pending`
       );
+
+      // Dry-run mode: log what would be applied and return early
+      if (this.config.DryRun) {
+        this.callbacks.OnLog?.('DRY RUN — no migrations will be applied');
+        for (const m of resolution.PendingMigrations) {
+          this.callbacks.OnLog?.(
+            `  Would apply: ${m.Version ?? '(repeatable)'} — ${m.Description}`
+          );
+        }
+        return {
+          MigrationsApplied: 0,
+          TotalExecutionTimeMS: Date.now() - startTime,
+          CurrentVersion: this.getCurrentVersion(currentHistory),
+          Details: [],
+          Success: true,
+        };
+      }
 
       // Execute migrations
       const result = await this.executeMigrationsWithHistory(
@@ -371,6 +439,280 @@ export class Skyway {
       }
     } finally {
       await masterPool.close();
+    }
+  }
+
+  /**
+   * Drops all objects in the configured schema.
+   *
+   * Drop order: FK constraints → views → stored procedures →
+   * functions → user-defined types → tables → schema.
+   * The `dbo` schema is never dropped (it is a SQL Server built-in).
+   *
+   * **WARNING**: This is destructive and irreversible!
+   */
+  async Clean(): Promise<CleanResult> {
+    const droppedObjects: string[] = [];
+
+    try {
+      await this.connectionManager.Connect();
+      const pool = this.connectionManager.GetPool();
+      const schema = this.config.Migrations.DefaultSchema;
+
+      this.callbacks.OnLog?.(`Cleaning schema [${schema}]...`);
+
+      // 1. Drop foreign key constraints
+      const fkResult = await pool.request().query(`
+        SELECT fk.name AS FKName, OBJECT_NAME(fk.parent_object_id) AS TableName
+        FROM sys.foreign_keys fk
+        JOIN sys.tables t ON fk.parent_object_id = t.object_id
+        WHERE SCHEMA_NAME(t.schema_id) = '${schema}'
+      `);
+      for (const row of fkResult.recordset) {
+        await pool.request().batch(`ALTER TABLE [${schema}].[${row.TableName}] DROP CONSTRAINT [${row.FKName}]`);
+        const label = `FK constraint [${row.FKName}] on [${schema}].[${row.TableName}]`;
+        droppedObjects.push(label);
+        this.callbacks.OnLog?.(`  Dropped ${label}`);
+      }
+
+      // 2. Drop views
+      const viewResult = await pool.request().query(`
+        SELECT name FROM sys.views WHERE schema_id = SCHEMA_ID('${schema}')
+      `);
+      for (const row of viewResult.recordset) {
+        await pool.request().batch(`DROP VIEW [${schema}].[${row.name}]`);
+        droppedObjects.push(`View [${schema}].[${row.name}]`);
+        this.callbacks.OnLog?.(`  Dropped view [${schema}].[${row.name}]`);
+      }
+
+      // 3. Drop stored procedures
+      const spResult = await pool.request().query(`
+        SELECT name FROM sys.procedures WHERE schema_id = SCHEMA_ID('${schema}')
+      `);
+      for (const row of spResult.recordset) {
+        await pool.request().batch(`DROP PROCEDURE [${schema}].[${row.name}]`);
+        droppedObjects.push(`Procedure [${schema}].[${row.name}]`);
+        this.callbacks.OnLog?.(`  Dropped procedure [${schema}].[${row.name}]`);
+      }
+
+      // 4. Drop functions
+      const fnResult = await pool.request().query(`
+        SELECT name FROM sys.objects
+        WHERE schema_id = SCHEMA_ID('${schema}')
+          AND type IN ('FN', 'IF', 'TF')
+      `);
+      for (const row of fnResult.recordset) {
+        await pool.request().batch(`DROP FUNCTION [${schema}].[${row.name}]`);
+        droppedObjects.push(`Function [${schema}].[${row.name}]`);
+        this.callbacks.OnLog?.(`  Dropped function [${schema}].[${row.name}]`);
+      }
+
+      // 5. Drop user-defined types
+      const typeResult = await pool.request().query(`
+        SELECT name FROM sys.types
+        WHERE schema_id = SCHEMA_ID('${schema}') AND is_user_defined = 1
+      `);
+      for (const row of typeResult.recordset) {
+        await pool.request().batch(`DROP TYPE [${schema}].[${row.name}]`);
+        droppedObjects.push(`Type [${schema}].[${row.name}]`);
+        this.callbacks.OnLog?.(`  Dropped type [${schema}].[${row.name}]`);
+      }
+
+      // 6. Drop tables
+      const tableResult = await pool.request().query(`
+        SELECT name FROM sys.tables WHERE schema_id = SCHEMA_ID('${schema}')
+      `);
+      for (const row of tableResult.recordset) {
+        await pool.request().batch(`DROP TABLE [${schema}].[${row.name}]`);
+        droppedObjects.push(`Table [${schema}].[${row.name}]`);
+        this.callbacks.OnLog?.(`  Dropped table [${schema}].[${row.name}]`);
+      }
+
+      // 7. Drop schema (unless it's dbo)
+      if (schema.toLowerCase() !== 'dbo') {
+        const schemaExists = await pool.request().query(
+          `SELECT COUNT(*) AS cnt FROM sys.schemas WHERE name = '${schema}'`
+        );
+        if (schemaExists.recordset[0].cnt > 0) {
+          await pool.request().batch(`DROP SCHEMA [${schema}]`);
+          droppedObjects.push(`Schema [${schema}]`);
+          this.callbacks.OnLog?.(`  Dropped schema [${schema}]`);
+        }
+      }
+
+      this.callbacks.OnLog?.(`Clean completed: ${droppedObjects.length} object(s) dropped`);
+
+      return {
+        Success: true,
+        ObjectsDropped: droppedObjects.length,
+        DroppedObjects: droppedObjects,
+      };
+    } catch (err) {
+      return {
+        Success: false,
+        ObjectsDropped: droppedObjects.length,
+        DroppedObjects: droppedObjects,
+        ErrorMessage: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+
+  /**
+   * Baselines the database at a specified version.
+   *
+   * Creates the history table and inserts a baseline marker. This is used
+   * to tell Skyway to skip all migrations up to and including the baseline
+   * version, treating the database as already at that point.
+   *
+   * Fails if the history table already contains migration records (not
+   * counting the SCHEMA marker).
+   *
+   * @param version - Version to baseline at (defaults to config BaselineVersion)
+   */
+  async Baseline(version?: string): Promise<BaselineResult> {
+    const baselineVersion = version ?? this.config.Migrations.BaselineVersion;
+
+    try {
+      await this.connectionManager.Connect();
+      const pool = this.connectionManager.GetPool();
+
+      this.historyTable = new HistoryTable(
+        pool,
+        this.config.Migrations.DefaultSchema,
+        this.config.Migrations.HistoryTable
+      );
+
+      await this.historyTable.EnsureExists();
+
+      // Check for existing migration records
+      const records = await this.historyTable.GetAllRecords();
+      const migrationRecords = records.filter(r => r.Type !== 'SCHEMA');
+      if (migrationRecords.length > 0) {
+        return {
+          Success: false,
+          BaselineVersion: baselineVersion,
+          ErrorMessage:
+            `Cannot baseline: history table already contains ${migrationRecords.length} migration record(s). ` +
+            `Use repair to fix issues or clean to start fresh.`,
+        };
+      }
+
+      // Insert schema marker if not present
+      if (records.length === 0) {
+        await this.historyTable.InsertSchemaMarker(this.config.Database.User);
+      }
+
+      // Insert baseline record
+      await this.historyTable.InsertBaseline(
+        baselineVersion,
+        this.config.Database.User
+      );
+
+      this.callbacks.OnLog?.(
+        `Successfully baselined schema [${this.config.Migrations.DefaultSchema}] at version ${baselineVersion}`
+      );
+
+      return {
+        Success: true,
+        BaselineVersion: baselineVersion,
+      };
+    } catch (err) {
+      return {
+        Success: false,
+        BaselineVersion: baselineVersion,
+        ErrorMessage: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+
+  /**
+   * Repairs the schema history table.
+   *
+   * Performs two operations:
+   * 1. Removes all failed migration entries
+   * 2. Realigns checksums of applied migrations with current files on disk
+   */
+  async Repair(): Promise<RepairResult> {
+    const repairDetails: string[] = [];
+
+    try {
+      await this.connectionManager.Connect();
+      const pool = this.connectionManager.GetPool();
+
+      this.historyTable = new HistoryTable(
+        pool,
+        this.config.Migrations.DefaultSchema,
+        this.config.Migrations.HistoryTable
+      );
+
+      if (!(await this.historyTable.Exists())) {
+        return {
+          Success: true,
+          FailedEntriesRemoved: 0,
+          ChecksumsRealigned: 0,
+          RepairDetails: ['History table does not exist — nothing to repair'],
+        };
+      }
+
+      const records = await this.historyTable.GetAllRecords();
+
+      // 1. Remove failed entries
+      let failedRemoved = 0;
+      for (const record of records) {
+        if (!record.Success) {
+          await this.historyTable.DeleteRecord(record.InstalledRank);
+          const detail = `Removed failed entry: version=${record.Version}, description=${record.Description}`;
+          repairDetails.push(detail);
+          this.callbacks.OnLog?.(detail);
+          failedRemoved++;
+        }
+      }
+
+      // 2. Realign checksums
+      const discovered = await ScanAndResolveMigrations(
+        this.config.Migrations.Locations
+      );
+      const diskByVersion = new Map<string, ResolvedMigration>();
+      for (const m of discovered) {
+        if (m.Version) {
+          diskByVersion.set(m.Version, m);
+        }
+      }
+
+      let checksumsRealigned = 0;
+      for (const record of records) {
+        if (record.Version === null || record.Type === 'SCHEMA' || !record.Success) {
+          continue;
+        }
+        const diskMigration = diskByVersion.get(record.Version);
+        if (diskMigration && record.Checksum !== null && record.Checksum !== diskMigration.Checksum) {
+          await this.historyTable.UpdateChecksum(record.InstalledRank, diskMigration.Checksum);
+          const detail = `Realigned checksum for version ${record.Version}: ${record.Checksum} → ${diskMigration.Checksum}`;
+          repairDetails.push(detail);
+          this.callbacks.OnLog?.(detail);
+          checksumsRealigned++;
+        }
+      }
+
+      this.callbacks.OnLog?.(
+        `Repair completed: ${failedRemoved} failed entry(ies) removed, ` +
+        `${checksumsRealigned} checksum(s) realigned`
+      );
+
+      return {
+        Success: true,
+        FailedEntriesRemoved: failedRemoved,
+        ChecksumsRealigned: checksumsRealigned,
+        RepairDetails: repairDetails,
+      };
+    } catch (err) {
+      return {
+        Success: false,
+        FailedEntriesRemoved: 0,
+        ChecksumsRealigned: 0,
+        RepairDetails: repairDetails,
+        ErrorMessage: err instanceof Error ? err.message : String(err),
+      };
     }
   }
 
