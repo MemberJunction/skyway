@@ -158,7 +158,89 @@ Skyway aims for compatibility with Flyway's behavior and artifacts:
 
 ## Improvements Over Flyway
 
-Skyway isn't just a clone — it fixes two significant pain points with Flyway:
+Skyway isn't just a clone — it fixes real pain points with Flyway:
+
+### Atomic Migration Runs (No More Partial Failures)
+
+Flyway executes each SQL statement directly without transaction wrapping. If migration #5 fails halfway through, statements that already executed are committed and **cannot be rolled back**. Your database is left in a broken, partially-migrated state that requires manual intervention to fix.
+
+Skyway takes advantage of SQL Server's transactional DDL support to wrap migrations in transactions. You choose the behavior:
+
+| Mode | Behavior on failure | Use case |
+|------|-------------------|----------|
+| `per-run` (default) | **All** pending migrations roll back | Maximum safety — your database is either fully migrated or completely untouched |
+| `per-migration` | Only the failed migration rolls back; previously completed migrations stay | When you want partial progress preserved |
+
+#### Flyway (No Transaction Safety)
+
+```mermaid
+flowchart LR
+    A[Migration 1] -->|committed| B[Migration 2]
+    B -->|committed| C[Migration 3]
+    C -->|committed| D[Migration 4]
+    D -->|FAILS halfway| E[Partial State]
+    style E fill:#ff6b6b,color:#fff
+    style A fill:#51cf66,color:#fff
+    style B fill:#51cf66,color:#fff
+    style C fill:#51cf66,color:#fff
+    style D fill:#ffd43b,color:#333
+```
+
+Migrations 1-3 are committed. Migration 4 is half-applied. Database is in a **broken state** requiring manual cleanup.
+
+#### Skyway `per-run` Mode (Default)
+
+```mermaid
+flowchart LR
+    subgraph TX [Single Transaction]
+        A[Migration 1] --> B[Migration 2]
+        B --> C[Migration 3]
+        C --> D[Migration 4]
+    end
+    D -->|FAILS| E[ROLLBACK ALL]
+    E --> F[Database Unchanged]
+    style TX fill:#e7f5ff,stroke:#339af0
+    style E fill:#ff6b6b,color:#fff
+    style F fill:#51cf66,color:#fff
+```
+
+All migrations run inside one transaction. Any failure rolls back **everything**. Database remains exactly as it was.
+
+#### Skyway `per-migration` Mode
+
+```mermaid
+flowchart LR
+    subgraph TX1 [Transaction 1]
+        A[Migration 1]
+    end
+    subgraph TX2 [Transaction 2]
+        B[Migration 2]
+    end
+    subgraph TX3 [Transaction 3]
+        C[Migration 3]
+    end
+    subgraph TX4 [Transaction 4]
+        D[Migration 4]
+    end
+    TX1 -->|committed| TX2
+    TX2 -->|committed| TX3
+    TX3 -->|committed| TX4
+    TX4 -->|FAILS| E[Migration 4 Rolled Back]
+    style TX1 fill:#51cf66,color:#fff
+    style TX2 fill:#51cf66,color:#fff
+    style TX3 fill:#51cf66,color:#fff
+    style TX4 fill:#ffd43b,color:#333
+    style E fill:#ff6b6b,color:#fff
+```
+
+Migrations 1-3 stay committed. Only migration 4 rolls back cleanly — no partial state.
+
+```typescript
+const skyway = new Skyway({
+    // ...
+    TransactionMode: 'per-run', // all-or-nothing (default)
+});
+```
 
 ### Smart Placeholder Handling
 
@@ -179,7 +261,7 @@ Skyway uses the `mssql` (tedious) driver with explicit `NVARCHAR(MAX)` type decl
 
 ## SQL Server Transaction Support
 
-Unlike MySQL or PostgreSQL, SQL Server supports transactional DDL — `CREATE TABLE`, `ALTER TABLE`, and most schema changes can be rolled back within a transaction. Skyway takes advantage of this to provide atomic migration execution: if any statement in a migration fails, the entire migration is rolled back.
+Unlike MySQL or PostgreSQL, SQL Server supports transactional DDL — `CREATE TABLE`, `ALTER TABLE`, and most schema changes can be rolled back within a transaction. Skyway takes full advantage of this with its `per-run` and `per-migration` transaction modes (see [Atomic Migration Runs](#atomic-migration-runs-no-more-partial-failures) above).
 
 ## Development
 
