@@ -14,7 +14,7 @@ async function main() {
       Port: 1433,
       Database: TEST_DB,
       User: 'sa',
-      Password: '***REMOVED***',
+      Password: 'LocalPW123',
       Options: {
         TrustServerCertificate: true,
         RequestTimeout: 600_000, // 10 min for baseline
