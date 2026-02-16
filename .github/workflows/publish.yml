@@ -67,8 +67,6 @@ jobs:
       - name: Publish to npm
         if: steps.changesets.outputs.has_changesets == 'true'
         run: npm run publish:packages
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Get published version
         if: steps.changesets.outputs.has_changesets == 'true'
