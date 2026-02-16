@@ -101,7 +101,6 @@ addSharedOptions(
   program
     .command('baseline')
     .description('Baseline the database at a specific version')
-    .option('--baseline-version <version>', 'Version to baseline at')
 ).action(async (opts) => {
   PrintBanner();
   const config = LoadConfig(mapOptions(opts));

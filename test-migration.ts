@@ -6,25 +6,24 @@
 import { Skyway } from './packages/core/src';
 
 async function main() {
-  const TEST_DB = 'MJ_3_3_NEW';
+  const TEST_DB = 'MJ_v5_0_Skyway2';
 
   const skyway = new Skyway({
     Database: {
-      Server: 'sql-claude',
+      Server: 'localhost',
       Port: 1433,
       Database: TEST_DB,
       User: 'sa',
-      Password: 'Claude2Sql99',
+      Password: '***REMOVED***',
       Options: {
         TrustServerCertificate: true,
         RequestTimeout: 600_000, // 10 min for baseline
       },
     },
     Migrations: {
-      Locations: ['/workspace/MJ/migrations'],
+      Locations: ['../MJ/migrations'],
       DefaultSchema: '__mj',
       HistoryTable: 'flyway_schema_history',
-      BaselineVersion: '202601122300',
       BaselineOnMigrate: true,
     },
     Placeholders: {},

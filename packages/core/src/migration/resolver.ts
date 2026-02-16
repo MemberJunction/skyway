@@ -25,6 +25,15 @@ export interface ResolverResult {
 
   /** Whether a baseline migration was found and should be applied */
   ShouldBaseline: boolean;
+
+  /** The effective baseline version used (auto-selected or explicit). Null if no baseline applies. */
+  EffectiveBaselineVersion: string | null;
+
+  /** True if the baseline version was auto-selected (not explicitly configured). */
+  BaselineAutoSelected: boolean;
+
+  /** Number of baseline files discovered on disk */
+  BaselineFileCount: number;
 }
 
 /**
@@ -81,18 +90,32 @@ export function ResolveMigrations(
   const highestApplied = getHighestAppliedVersion(applied);
 
   // --- Resolve baseline migrations ---
+  let effectiveBaselineVersion: string | null = null;
+  let baselineAutoSelected = false;
+
   if (shouldBaseline && baselines.length > 0) {
-    // Find the baseline matching the configured version
-    const matchingBaseline = baselines.find((b) => b.Version === baselineVersion);
-    if (matchingBaseline) {
-      pending.push(matchingBaseline);
+    let selectedBaseline: ResolvedMigration | undefined;
+
+    if (baselineVersion === '1') {
+      // Auto-select: pick the highest-versioned baseline
+      // baselines are already sorted ascending by version, so take the last one
+      selectedBaseline = baselines[baselines.length - 1];
+      baselineAutoSelected = true;
+    } else {
+      // Explicit version: find exact match
+      selectedBaseline = baselines.find((b) => b.Version === baselineVersion);
+    }
+
+    if (selectedBaseline) {
+      effectiveBaselineVersion = selectedBaseline.Version;
+      pending.push(selectedBaseline);
       statusReport.push({
         Type: 'baseline',
-        Version: matchingBaseline.Version,
-        Description: matchingBaseline.Description,
+        Version: selectedBaseline.Version,
+        Description: selectedBaseline.Description,
         State: 'PENDING',
-        Script: matchingBaseline.ScriptPath,
-        DiskChecksum: matchingBaseline.Checksum,
+        Script: selectedBaseline.ScriptPath,
+        DiskChecksum: selectedBaseline.Checksum,
         AppliedChecksum: null,
         InstalledOn: null,
         ExecutionTime: null,
@@ -120,7 +143,7 @@ export function ResolveMigrations(
         InstalledOn: appliedRecord.InstalledOn,
         ExecutionTime: appliedRecord.ExecutionTime,
       });
-    } else if (shouldBaseline && migration.Version! <= baselineVersion) {
+    } else if (shouldBaseline && effectiveBaselineVersion !== null && migration.Version! <= effectiveBaselineVersion) {
       // Below or at baseline — skip (baseline covers these)
       statusReport.push({
         Type: 'versioned',
@@ -242,6 +265,9 @@ export function ResolveMigrations(
     PendingMigrations: pending,
     StatusReport: statusReport,
     ShouldBaseline: shouldBaseline,
+    EffectiveBaselineVersion: effectiveBaselineVersion,
+    BaselineAutoSelected: baselineAutoSelected,
+    BaselineFileCount: baselines.length,
   };
 }
 

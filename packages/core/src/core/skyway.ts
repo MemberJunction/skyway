@@ -229,6 +229,12 @@ export class Skyway {
         this.config.Migrations.OutOfOrder
       );
 
+      if (resolution.BaselineAutoSelected && resolution.EffectiveBaselineVersion) {
+        this.callbacks.OnLog?.(
+          `Auto-selected baseline version: ${resolution.EffectiveBaselineVersion} (highest of ${resolution.BaselineFileCount} baseline file(s))`
+        );
+      }
+
       if (resolution.PendingMigrations.length === 0) {
         this.callbacks.OnLog?.('Schema is up to date. No migrations to apply.');
         return {
