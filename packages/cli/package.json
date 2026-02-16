@@ -1,6 +1,6 @@
 {
   "name": "@memberjunction/skyway-cli",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "CLI for Skyway — TypeScript-native Flyway-compatible database migrations",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -32,7 +32,7 @@
     "directory": "packages/cli"
   },
   "dependencies": {
-    "@memberjunction/skyway-core": "^0.5.1",
+    "@memberjunction/skyway-core": "^0.5.2",
     "commander": "^12.1.0",
     "chalk": "^4.1.2",
     "dotenv": "^16.4.5"

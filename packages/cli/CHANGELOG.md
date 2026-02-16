@@ -1,5 +1,13 @@
 # @memberjunction/skyway-cli
 
+## 0.5.2
+
+### Patch Changes
+
+- 0b0c016: Add README files for npm package pages
+- Updated dependencies [0b0c016]
+  - @memberjunction/skyway-core@0.5.2
+
 ## 0.5.1
 
 ### Patch Changes
