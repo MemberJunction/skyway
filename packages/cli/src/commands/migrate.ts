@@ -3,8 +3,8 @@
  * Implementation of the `skyway migrate` CLI command.
  */
 
-import { Skyway } from '@skyway/core';
-import { SkywayConfig } from '@skyway/core';
+import { Skyway } from '@memberjunction/skyway-core';
+import { SkywayConfig } from '@memberjunction/skyway-core';
 import { LogMigrationStart, LogMigrationEnd, LogInfo, LogError, PrintMigrateSummary } from '../formatting';
 
 /**

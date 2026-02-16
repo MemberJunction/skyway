@@ -7,7 +7,7 @@
  *
  * @example
  * ```typescript
- * import { Skyway } from '@skyway/core';
+ * import { Skyway } from '@memberjunction/skyway-core';
  *
  * const skyway = new Skyway({
  *   Database: { Server: 'localhost', Database: 'mydb', User: 'sa', Password: 'secret' },

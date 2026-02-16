@@ -5,7 +5,7 @@
  */
 
 import chalk from 'chalk';
-import { MigrationStatus, MigrationState, ResolvedMigration, MigrationExecutionResult } from '@skyway/core';
+import { MigrationStatus, MigrationState, ResolvedMigration, MigrationExecutionResult } from '@memberjunction/skyway-core';
 
 /**
  * Prints the Skyway banner to the console.

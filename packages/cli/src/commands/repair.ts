@@ -3,7 +3,7 @@
  * Implementation of the `skyway repair` CLI command.
  */
 
-import { Skyway, SkywayConfig } from '@skyway/core';
+import { Skyway, SkywayConfig } from '@memberjunction/skyway-core';
 import { LogInfo, LogSuccess, LogError } from '../formatting';
 
 /**

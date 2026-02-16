@@ -20,7 +20,7 @@ import { RunValidate } from '../commands/validate';
 import { RunClean } from '../commands/clean';
 import { RunBaseline } from '../commands/baseline';
 import { RunRepair } from '../commands/repair';
-import { Skyway } from '@skyway/core';
+import { Skyway } from '@memberjunction/skyway-core';
 
 const program = new Command();
 

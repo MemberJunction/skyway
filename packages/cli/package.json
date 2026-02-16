@@ -1,9 +1,10 @@
 {
-  "name": "@skyway/cli",
+  "name": "@memberjunction/skyway-cli",
   "version": "0.5.0",
   "description": "CLI for Skyway — TypeScript-native Flyway-compatible database migrations",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": ["dist"],
   "bin": {
     "skyway": "./dist/bin/skyway.js"
   },
@@ -20,8 +21,16 @@
     "cli"
   ],
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MemberJunction/skyway.git",
+    "directory": "packages/cli"
+  },
   "dependencies": {
-    "@skyway/core": "^0.5.0",
+    "@memberjunction/skyway-core": "^0.5.0",
     "commander": "^12.1.0",
     "chalk": "^4.1.2",
     "dotenv": "^16.4.5"

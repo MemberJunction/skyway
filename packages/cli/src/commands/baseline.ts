@@ -3,7 +3,7 @@
  * Implementation of the `skyway baseline` CLI command.
  */
 
-import { Skyway, SkywayConfig, ScanAndResolveMigrations } from '@skyway/core';
+import { Skyway, SkywayConfig, ScanAndResolveMigrations } from '@memberjunction/skyway-core';
 import { LogInfo, LogSuccess, LogError } from '../formatting';
 
 /**

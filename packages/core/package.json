@@ -1,9 +1,10 @@
 {
-  "name": "@skyway/core",
+  "name": "@memberjunction/skyway-core",
   "version": "0.5.0",
   "description": "TypeScript-native Flyway-compatible database migration engine for SQL Server",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": ["dist"],
   "scripts": {
     "build": "tsc",
     "clean": "rm -rf dist",
@@ -18,6 +19,14 @@
     "typescript"
   ],
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MemberJunction/skyway.git",
+    "directory": "packages/core"
+  },
   "dependencies": {
     "mssql": "^11.0.1",
     "fast-glob": "^3.3.2",

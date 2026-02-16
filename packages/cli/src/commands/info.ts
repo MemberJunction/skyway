@@ -3,7 +3,7 @@
  * Implementation of the `skyway info` CLI command.
  */
 
-import { Skyway, SkywayConfig } from '@skyway/core';
+import { Skyway, SkywayConfig } from '@memberjunction/skyway-core';
 import { PrintInfoTable, LogInfo, LogError } from '../formatting';
 
 /**

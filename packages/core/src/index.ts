@@ -1,5 +1,5 @@
 /**
- * @module @skyway/core
+ * @module @memberjunction/skyway-core
  *
  * Skyway — A TypeScript-native Flyway-compatible database migration engine
  * for SQL Server.
@@ -7,7 +7,7 @@
  * ## Quick Start
  *
  * ```typescript
- * import { Skyway } from '@skyway/core';
+ * import { Skyway } from '@memberjunction/skyway-core';
  *
  * const skyway = new Skyway({
  *   Database: {
