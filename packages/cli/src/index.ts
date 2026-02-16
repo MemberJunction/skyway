@@ -1,5 +1,5 @@
 /**
- * @module @skyway/cli
+ * @module @memberjunction/skyway-cli
  *
  * CLI package for Skyway database migrations.
  * This module exports the config loader and command implementations
