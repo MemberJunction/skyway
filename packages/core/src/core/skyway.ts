@@ -7,7 +7,7 @@
  *
  * @example
  * ```typescript
- * import { Skyway } from '@skyway/core';
+ * import { Skyway } from '@memberjunction/skyway-core';
  *
  * const skyway = new Skyway({
  *   Database: { Server: 'localhost', Database: 'mydb', User: 'sa', Password: 'secret' },
@@ -228,6 +228,12 @@ export class Skyway {
         this.config.Migrations.BaselineOnMigrate,
         this.config.Migrations.OutOfOrder
       );
+
+      if (resolution.BaselineAutoSelected && resolution.EffectiveBaselineVersion) {
+        this.callbacks.OnLog?.(
+          `Auto-selected baseline version: ${resolution.EffectiveBaselineVersion} (highest of ${resolution.BaselineFileCount} baseline file(s))`
+        );
+      }
 
       if (resolution.PendingMigrations.length === 0) {
         this.callbacks.OnLog?.('Schema is up to date. No migrations to apply.');

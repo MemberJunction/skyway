@@ -5,12 +5,12 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build --workspaces",
+    "build": "npm run build -w packages/core && npm run build -w packages/cli",
     "clean": "npm run clean --workspaces",
     "test": "vitest run"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=24.0.0"
   },
   "devDependencies": {
     "vitest": "^4.0.18"

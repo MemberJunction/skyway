@@ -12,7 +12,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { SkywayConfig } from '@skyway/core';
+import { SkywayConfig } from '@memberjunction/skyway-core';
 
 /**
  * Configuration file names searched in order.
