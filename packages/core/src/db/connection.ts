@@ -39,7 +39,7 @@ export class ConnectionManager {
       password: this.config.Password,
       database: this.config.Database,
       options: {
-        encrypt: this.config.Options?.Encrypt ?? false,
+        encrypt: this.config.Options?.Encrypt ?? true,
         trustServerCertificate: this.config.Options?.TrustServerCertificate ?? true,
         enableArithAbort: this.config.Options?.EnableArithAbort ?? true,
       },
@@ -98,7 +98,7 @@ export class ConnectionManager {
       password: this.config.Password,
       database: 'master',
       options: {
-        encrypt: this.config.Options?.Encrypt ?? false,
+        encrypt: this.config.Options?.Encrypt ?? true,
         trustServerCertificate: this.config.Options?.TrustServerCertificate ?? true,
         enableArithAbort: this.config.Options?.EnableArithAbort ?? true,
       },
