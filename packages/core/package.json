@@ -1,6 +1,6 @@
 {
   "name": "@memberjunction/skyway-core",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "TypeScript-native Flyway-compatible database migration engine for SQL Server",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

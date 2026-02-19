@@ -1,5 +1,12 @@
 # @memberjunction/skyway-cli
 
+## 0.5.3
+
+### Patch Changes
+
+- Updated dependencies [f7c7ae4]
+  - @memberjunction/skyway-core@0.5.3
+
 ## 0.5.2
 
 ### Patch Changes
