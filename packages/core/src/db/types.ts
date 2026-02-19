@@ -32,7 +32,7 @@ export interface DatabaseConfig {
  * Extended connection options for fine-tuning SQL Server connectivity.
  */
 export interface DatabaseConnectionOptions {
-  /** Whether to encrypt the connection. Defaults to false for local dev */
+  /** Whether to encrypt the connection. Defaults to true */
   Encrypt?: boolean;
 
   /** Whether to trust self-signed certificates. Defaults to true */
