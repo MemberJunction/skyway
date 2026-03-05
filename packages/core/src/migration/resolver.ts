@@ -161,12 +161,12 @@ export function ResolveMigrations(
       highestApplied !== null &&
       migration.Version! < highestApplied
     ) {
-      // Out of order and not allowed — skip but warn
+      // Out of order and not allowed — mark as ignored
       statusReport.push({
         Type: 'versioned',
         Version: migration.Version,
         Description: migration.Description,
-        State: 'PENDING',
+        State: 'IGNORED',
         Script: migration.ScriptPath,
         DiskChecksum: migration.Checksum,
         AppliedChecksum: null,

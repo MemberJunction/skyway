@@ -159,6 +159,8 @@ function getStateColor(state: MigrationState): chalk.Chalk {
       return chalk.red;
     case 'MISSING':
       return chalk.red;
+    case 'IGNORED':
+      return chalk.red;
     case 'OUTDATED':
       return chalk.magenta;
     case 'ABOVE_BASELINE':

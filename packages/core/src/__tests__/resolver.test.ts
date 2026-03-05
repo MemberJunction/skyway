@@ -285,7 +285,7 @@ describe('ResolveMigrations — repeatable migrations', () => {
 });
 
 describe('ResolveMigrations — out-of-order', () => {
-  it('includes out-of-order migration in status but not pending when outOfOrder is false', () => {
+  it('marks out-of-order migration as IGNORED when outOfOrder is false', () => {
     const discovered = [
       makeMigration({ Version: '202401010000', Description: 'Old migration' }),
     ];
@@ -295,10 +295,51 @@ describe('ResolveMigrations — out-of-order', () => {
 
     const result = ResolveMigrations(discovered, applied, '1', false, false);
 
-    // Out-of-order migrations still appear as PENDING in status but are NOT
-    // added to the pending execution list
     expect(result.PendingMigrations).toHaveLength(0);
     const status = result.StatusReport.find((s) => s.Version === '202401010000');
+    expect(status?.State).toBe('IGNORED');
+  });
+
+  it('includes out-of-order migration as PENDING when outOfOrder is true', () => {
+    const discovered = [
+      makeMigration({ Version: '202401010000', Description: 'Old migration' }),
+    ];
+    const applied = [
+      makeHistory({ Version: '202601010000', Description: 'Applied later' }),
+    ];
+
+    const result = ResolveMigrations(discovered, applied, '1', false, true);
+
+    expect(result.PendingMigrations).toHaveLength(1);
+    expect(result.PendingMigrations[0].Version).toBe('202401010000');
+    const status = result.StatusReport.find((s) => s.Version === '202401010000');
     expect(status?.State).toBe('PENDING');
+  });
+
+  it('marks all out-of-order migrations as IGNORED and keeps future ones PENDING', () => {
+    const discovered = [
+      makeMigration({ Version: '202301010000', Description: 'Very old' }),
+      makeMigration({ Version: '202401010000', Description: 'Old' }),
+      makeMigration({ Version: '202701010000', Description: 'Future' }),
+    ];
+    const applied = [
+      makeHistory({ Version: '202601010000', Description: 'Applied' }),
+    ];
+
+    const result = ResolveMigrations(discovered, applied, '1', false, false);
+
+    // Two migrations are below highest applied (202601010000)
+    const ignored = result.StatusReport.filter((s) => s.State === 'IGNORED');
+    expect(ignored).toHaveLength(2);
+    expect(ignored.map((s) => s.Version)).toEqual(['202301010000', '202401010000']);
+
+    // One migration is above — should be PENDING
+    const pending = result.StatusReport.filter((s) => s.State === 'PENDING');
+    expect(pending).toHaveLength(1);
+    expect(pending[0].Version).toBe('202701010000');
+
+    // Only the future migration should be in PendingMigrations
+    expect(result.PendingMigrations).toHaveLength(1);
+    expect(result.PendingMigrations[0].Version).toBe('202701010000');
   });
 });
