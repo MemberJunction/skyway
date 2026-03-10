@@ -68,7 +68,8 @@ export type MigrationState =
   | 'FAILED'           // Recorded as failed in history table
   | 'OUTDATED'         // Repeatable migration with changed checksum
   | 'BASELINE'         // Applied as a baseline migration
-  | 'ABOVE_BASELINE';  // Version is above baseline, skipped
+  | 'ABOVE_BASELINE'   // Version is above baseline, skipped
+  | 'IGNORED';         // Out-of-order migration skipped (outOfOrder=false)
 
 /**
  * Combined view of a migration's disk info and database state.

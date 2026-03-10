@@ -285,7 +285,7 @@ describe('ResolveMigrations — repeatable migrations', () => {
 });
 
 describe('ResolveMigrations — out-of-order', () => {
-  it('includes out-of-order migration in status but not pending when outOfOrder is false', () => {
+  it('marks out-of-order migration as IGNORED when outOfOrder is false', () => {
     const discovered = [
       makeMigration({ Version: '202401010000', Description: 'Old migration' }),
     ];
@@ -295,10 +295,102 @@ describe('ResolveMigrations — out-of-order', () => {
 
     const result = ResolveMigrations(discovered, applied, '1', false, false);
 
-    // Out-of-order migrations still appear as PENDING in status but are NOT
-    // added to the pending execution list
     expect(result.PendingMigrations).toHaveLength(0);
     const status = result.StatusReport.find((s) => s.Version === '202401010000');
+    expect(status?.State).toBe('IGNORED');
+  });
+
+  it('includes out-of-order migration as PENDING when outOfOrder is true', () => {
+    const discovered = [
+      makeMigration({ Version: '202401010000', Description: 'Old migration' }),
+    ];
+    const applied = [
+      makeHistory({ Version: '202601010000', Description: 'Applied later' }),
+    ];
+
+    const result = ResolveMigrations(discovered, applied, '1', false, true);
+
+    expect(result.PendingMigrations).toHaveLength(1);
+    expect(result.PendingMigrations[0].Version).toBe('202401010000');
+    const status = result.StatusReport.find((s) => s.Version === '202401010000');
     expect(status?.State).toBe('PENDING');
+  });
+
+  it('marks all out-of-order migrations as IGNORED and keeps future ones PENDING', () => {
+    const discovered = [
+      makeMigration({ Version: '202301010000', Description: 'Very old' }),
+      makeMigration({ Version: '202401010000', Description: 'Old' }),
+      makeMigration({ Version: '202701010000', Description: 'Future' }),
+    ];
+    const applied = [
+      makeHistory({ Version: '202601010000', Description: 'Applied' }),
+    ];
+
+    const result = ResolveMigrations(discovered, applied, '1', false, false);
+
+    // Two migrations are below highest applied (202601010000)
+    const ignored = result.StatusReport.filter((s) => s.State === 'IGNORED');
+    expect(ignored).toHaveLength(2);
+    expect(ignored.map((s) => s.Version)).toEqual(['202301010000', '202401010000']);
+
+    // One migration is above — should be PENDING
+    const pending = result.StatusReport.filter((s) => s.State === 'PENDING');
+    expect(pending).toHaveLength(1);
+    expect(pending[0].Version).toBe('202701010000');
+
+    // Only the future migration should be in PendingMigrations
+    expect(result.PendingMigrations).toHaveLength(1);
+    expect(result.PendingMigrations[0].Version).toBe('202701010000');
+  });
+
+  it('does not mark earlier migrations as IGNORED on fresh DB with baseline', () => {
+    // Simulates the MJ scenario: v2, v3, v4, v5 migration folders.
+    // On a fresh database with baselineOnMigrate=true, the highest baseline
+    // is auto-selected. Migrations at/below the baseline should be ABOVE_BASELINE,
+    // migrations above should be PENDING. None should be IGNORED.
+    const discovered = [
+      // Baseline file (latest)
+      makeMigration({ Type: 'baseline', Version: '202601010000', Description: 'v5 Baseline' }),
+      // Old versioned migrations (v2, v3, v4 — below baseline)
+      makeMigration({ Version: '202301010000', Description: 'v2 Create Users' }),
+      makeMigration({ Version: '202401010000', Description: 'v3 Add Roles' }),
+      makeMigration({ Version: '202501010000', Description: 'v4 Add Permissions' }),
+      // New versioned migrations (v5 — above baseline)
+      makeMigration({ Version: '202601010001', Description: 'v5 Add Audit Log' }),
+      makeMigration({ Version: '202601020000', Description: 'v5 Add Notifications' }),
+    ];
+
+    // Fresh database — no applied history
+    const result = ResolveMigrations(discovered, [], '1', true, false);
+
+    // Baseline should be auto-selected
+    expect(result.BaselineAutoSelected).toBe(true);
+    expect(result.EffectiveBaselineVersion).toBe('202601010000');
+
+    // No migrations should be IGNORED
+    const ignored = result.StatusReport.filter((s) => s.State === 'IGNORED');
+    expect(ignored).toHaveLength(0);
+
+    // Old migrations should be ABOVE_BASELINE
+    const aboveBaseline = result.StatusReport.filter((s) => s.State === 'ABOVE_BASELINE');
+    expect(aboveBaseline).toHaveLength(3);
+    expect(aboveBaseline.map((s) => s.Version)).toEqual([
+      '202301010000',
+      '202401010000',
+      '202501010000',
+    ]);
+
+    // New migrations should be PENDING
+    const pending = result.StatusReport.filter(
+      (s) => s.State === 'PENDING' && s.Type === 'versioned'
+    );
+    expect(pending).toHaveLength(2);
+    expect(pending.map((s) => s.Version)).toEqual(['202601010001', '202601020000']);
+
+    // PendingMigrations should include baseline + 2 versioned
+    expect(result.PendingMigrations).toHaveLength(3);
+    expect(result.PendingMigrations[0].Type).toBe('baseline');
+    expect(result.PendingMigrations[1].Version).toBe('202601010001');
+    expect(result.PendingMigrations[2].Version).toBe('202601020000');
   });
 });

@@ -235,6 +235,30 @@ export class Skyway {
         );
       }
 
+      // Check for out-of-order migrations when outOfOrder is disabled
+      const ignoredMigrations = resolution.StatusReport.filter(
+        (s) => s.State === 'IGNORED'
+      );
+
+      if (ignoredMigrations.length > 0) {
+        for (const m of ignoredMigrations) {
+          this.callbacks.OnLog?.(
+            `WARNING: Out-of-order migration detected: ${m.Version} (${m.Description})`
+          );
+        }
+        const versions = ignoredMigrations.map((m) => m.Version).join(', ');
+        return {
+          MigrationsApplied: 0,
+          TotalExecutionTimeMS: Date.now() - startTime,
+          CurrentVersion: this.getCurrentVersion(currentHistory),
+          Details: [],
+          Success: false,
+          ErrorMessage:
+            `Detected resolved migration not applied to database: ${versions}. ` +
+            `To allow out-of-order migrations, set outOfOrder to true.`,
+        };
+      }
+
       if (resolution.PendingMigrations.length === 0) {
         this.callbacks.OnLog?.('Schema is up to date. No migrations to apply.');
         return {
@@ -379,6 +403,24 @@ export class Skyway {
         errors.push(
           `Checksum mismatch for version ${record.Version} (${record.Description}): ` +
             `expected ${record.Checksum} but computed ${diskMigration.Checksum}`
+        );
+      }
+    }
+
+    // Check for out-of-order migrations
+    const resolution = ResolveMigrations(
+      discovered,
+      applied,
+      this.config.Migrations.BaselineVersion,
+      this.config.Migrations.BaselineOnMigrate,
+      this.config.Migrations.OutOfOrder
+    );
+
+    for (const status of resolution.StatusReport) {
+      if (status.State === 'IGNORED') {
+        errors.push(
+          `Detected resolved migration not applied to database: ${status.Version}. ` +
+          `To allow out-of-order migrations, set outOfOrder to true.`
         );
       }
     }
