@@ -5,21 +5,23 @@
 
 import { Skyway } from '@memberjunction/skyway-core';
 import { SkywayConfig } from '@memberjunction/skyway-core';
-import { LogMigrationStart, LogMigrationEnd, LogInfo, LogError, PrintMigrateSummary } from '../formatting';
+import { LogMigrationStart, LogMigrationEnd, LogInfo, LogError, LogBatchProgress, PrintMigrateSummary } from '../formatting';
 
 /**
  * Executes the migrate command: applies all pending migrations.
  *
  * @param config - Resolved Skyway configuration
  * @param quiet - When true, suppress per-migration output
+ * @param verbose - When true, enable per-batch progress logging
  */
-export async function RunMigrate(config: SkywayConfig, quiet: boolean = false): Promise<boolean> {
+export async function RunMigrate(config: SkywayConfig, quiet: boolean = false, verbose: boolean = false): Promise<boolean> {
   const skyway = new Skyway(config);
 
   if (!quiet) {
     skyway.OnProgress({
       OnMigrationStart: LogMigrationStart,
       OnMigrationEnd: LogMigrationEnd,
+      OnBatchEnd: verbose ? LogBatchProgress : undefined,
       OnLog: LogInfo,
     });
   } else {
@@ -33,6 +35,9 @@ export async function RunMigrate(config: SkywayConfig, quiet: boolean = false): 
     LogInfo(`Schema: ${config.Migrations.DefaultSchema ?? 'dbo'}`);
     LogInfo(`Locations: ${config.Migrations.Locations.join(', ')}`);
     LogInfo(`Transaction mode: ${config.TransactionMode ?? 'per-run'}`);
+    if (config.Verbose || verbose) {
+      LogInfo('Verbose: enabled');
+    }
     if (config.DryRun) {
       LogInfo('Mode: DRY RUN');
     }
@@ -45,7 +50,8 @@ export async function RunMigrate(config: SkywayConfig, quiet: boolean = false): 
       result.TotalExecutionTimeMS,
       result.CurrentVersion,
       result.Success,
-      result.ErrorMessage
+      result.ErrorMessage,
+      config.TransactionMode ?? 'per-run'
     );
 
     return result.Success;

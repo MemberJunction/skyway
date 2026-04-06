@@ -29,6 +29,9 @@ export interface SQLBatch {
 
   /** 1-based line number where this batch starts in the original script */
   StartLine: number;
+
+  /** 1-based line number where this batch ends in the original script */
+  EndLine: number;
 }
 
 /**
@@ -91,6 +94,7 @@ export function SplitOnGO(script: string): SQLBatch[] {
           SQL: batchSQL,
           RepeatCount: repeatCount,
           StartLine: batchStartLine,
+          EndLine: i, // line before the GO (0-based i → 1-based is i, since GO is on line i+1)
         });
       }
 
@@ -109,6 +113,7 @@ export function SplitOnGO(script: string): SQLBatch[] {
       SQL: finalSQL,
       RepeatCount: 1,
       StartLine: batchStartLine,
+      EndLine: lines.length,
     });
   }
 

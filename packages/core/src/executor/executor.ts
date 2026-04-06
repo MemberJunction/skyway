@@ -26,7 +26,8 @@ import * as sql from 'mssql';
 import { ResolvedMigration } from '../migration/types';
 import { SplitOnGO } from './sql-splitter';
 import { SubstitutePlaceholders, PlaceholderContext } from './placeholder';
-import { MigrationExecutionError, TransactionError } from '../core/errors';
+import { MigrationExecutionError, TransactionError, FailedBatchInfo } from '../core/errors';
+import { ExtractErrorIdentifiers, FindContextLines } from './error-context';
 
 /**
  * Result of executing a single migration file.
@@ -57,6 +58,9 @@ export interface ExecutionCallbacks {
 
   /** Called before each SQL batch within a migration */
   OnBatchStart?: (batchIndex: number, totalBatches: number) => void;
+
+  /** Called after each SQL batch completes successfully (verbose mode) */
+  OnBatchEnd?: (batchIndex: number, totalBatches: number) => void;
 
   /** Called for informational log messages */
   OnLog?: (message: string) => void;
@@ -286,14 +290,29 @@ async function executeSingleMigration(
           await request.batch(batch.SQL);
         } catch (batchErr) {
           const elapsedMS = Date.now() - startTime;
+          const errorMessage = batchErr instanceof Error ? batchErr.message : String(batchErr);
+
+          // Extract identifiers from error and find related lines
+          const identifiers = ExtractErrorIdentifiers(errorMessage);
+          const contextLines = FindContextLines(batch.SQL, batch.StartLine, identifiers);
+
+          const batchInfo: FailedBatchInfo = {
+            BatchNumber: i + 1,
+            TotalBatches: batches.length,
+            StartLine: batch.StartLine,
+            EndLine: batch.EndLine,
+            SucceededBatches: i,
+            BatchSQL: batch.SQL,
+            ContextLines: contextLines.length > 0 ? contextLines : undefined,
+          };
+
           const error = new MigrationExecutionError(
             migration.Version,
             migration.ScriptPath,
-            `Failed at batch ${i + 1}/${batches.length} (line ${batch.StartLine}): ${
-              batchErr instanceof Error ? batchErr.message : String(batchErr)
-            }`,
+            `Failed at batch ${i + 1}/${batches.length} (lines ${batch.StartLine}-${batch.EndLine}): ${errorMessage}`,
             batch.SQL.substring(0, 500),
-            batchErr instanceof Error ? batchErr : undefined
+            batchErr instanceof Error ? batchErr : undefined,
+            batchInfo
           );
 
           const result: MigrationExecutionResult = {
@@ -306,6 +325,8 @@ async function executeSingleMigration(
           return result;
         }
       }
+
+      callbacks?.OnBatchEnd?.(i + 1, batches.length);
     }
 
     // Step 4: Success

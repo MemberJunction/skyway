@@ -5,7 +5,7 @@
  */
 
 import chalk from 'chalk';
-import { MigrationStatus, MigrationState, ResolvedMigration, MigrationExecutionResult } from '@memberjunction/skyway-core';
+import { MigrationStatus, MigrationState, ResolvedMigration, MigrationExecutionResult, MigrationExecutionError, TruncateSQL } from '@memberjunction/skyway-core';
 
 /**
  * Prints the Skyway banner to the console.
@@ -65,7 +65,7 @@ export function LogMigrationStart(migration: ResolvedMigration): void {
 }
 
 /**
- * Logs a migration execution result.
+ * Logs a migration execution result with detailed batch and context info on failure.
  */
 export function LogMigrationEnd(result: MigrationExecutionResult): void {
   if (result.Success) {
@@ -73,9 +73,46 @@ export function LogMigrationEnd(result: MigrationExecutionResult): void {
   } else {
     console.log(chalk.red(` FAILED`));
     if (result.Error) {
-      console.log(chalk.red(`    ${result.Error.message}`));
+      const err = result.Error;
+      if (err instanceof MigrationExecutionError && err.BatchInfo) {
+        const info = err.BatchInfo;
+        console.log(chalk.red(`\n    Migration failed: ${err.Script}`));
+        console.log(chalk.red(`    Batch ${info.BatchNumber} of ${info.TotalBatches} failed`));
+        console.log(chalk.red(`    File lines: ${info.StartLine}-${info.EndLine}`));
+        console.log(chalk.gray(`    ${info.SucceededBatches} batch(es) succeeded before failure`));
+
+        // Show the original SQL Server error
+        const cause = err.cause;
+        if (cause instanceof Error) {
+          console.log(chalk.red(`\n    SQL Error: ${cause.message}`));
+        }
+
+        // Show context lines that reference identifiers from the error
+        if (info.ContextLines && info.ContextLines.length > 0) {
+          console.log(chalk.yellow(`\n    Related lines in failed batch:`));
+          for (const ctx of info.ContextLines) {
+            console.log(chalk.yellow(`      Line ${ctx.LineNumber}: `) + chalk.white(ctx.Text));
+          }
+        }
+
+        // Show truncated batch SQL
+        console.log(chalk.gray(`\n    Failed batch SQL (first 500 chars):`));
+        const truncated = TruncateSQL(info.BatchSQL, 500);
+        for (const line of truncated.split('\n')) {
+          console.log(chalk.gray(`      ${line}`));
+        }
+      } else {
+        console.log(chalk.red(`    ${err.message}`));
+      }
     }
   }
+}
+
+/**
+ * Logs verbose batch progress.
+ */
+export function LogBatchProgress(batchIndex: number, totalBatches: number): void {
+  console.log(chalk.gray(`    Batch ${batchIndex}/${totalBatches} completed`));
 }
 
 /**
@@ -107,7 +144,8 @@ export function PrintMigrateSummary(
   totalMs: number,
   currentVersion: string | null,
   success: boolean,
-  errorMessage?: string
+  errorMessage?: string,
+  transactionMode?: string
 ): void {
   console.log();
   console.log(chalk.gray('  ' + '─'.repeat(50)));
@@ -127,6 +165,17 @@ export function PrintMigrateSummary(
     );
     if (errorMessage) {
       console.log(chalk.red(`  ${errorMessage}`));
+    }
+
+    // Transaction safety reporting
+    if (transactionMode === 'per-run') {
+      console.log(chalk.yellow(`  Transaction mode: per-run — all changes have been rolled back`));
+    } else if (transactionMode === 'per-migration') {
+      if (applied > 0) {
+        console.log(chalk.yellow(`  Transaction mode: per-migration — ${applied} prior migration(s) remain committed, failed migration was rolled back`));
+      } else {
+        console.log(chalk.yellow(`  Transaction mode: per-migration — failed migration was rolled back`));
+      }
     }
   }
 
