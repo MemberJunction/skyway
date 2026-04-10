@@ -4,6 +4,7 @@
  */
 
 import { DatabaseConfig } from '../db/types';
+import { DatabaseProvider } from '../db/provider';
 
 /**
  * Controls how transactions are applied during a migration run.
@@ -22,8 +23,19 @@ export type TransactionMode = 'per-run' | 'per-migration';
  * Complete configuration for a Skyway migration run.
  */
 export interface SkywayConfig {
-  /** SQL Server connection settings */
+  /** Database connection settings */
   Database: DatabaseConfig;
+
+  /**
+   * An explicit database provider instance.
+   * When provided, Skyway uses this provider for all database operations
+   * instead of creating one from the Database config.
+   *
+   * This allows consumers to supply custom providers or pre-configured
+   * provider instances from driver-specific packages like
+   * `@memberjunction/skyway-sqlserver` or `@memberjunction/skyway-postgres`.
+   */
+  Provider?: DatabaseProvider;
 
   /** Migration file discovery and execution settings */
   Migrations: MigrationConfig;
@@ -116,12 +128,35 @@ export interface MigrationConfig {
  * @param config - Partial configuration provided by the user
  * @returns Complete configuration with all defaults applied
  */
-export function resolveConfig(config: SkywayConfig): Required<SkywayConfig> & { Migrations: Required<MigrationConfig> } {
+/**
+ * Resolved configuration type with all defaults applied.
+ */
+export type ResolvedSkywayConfig = {
+  Database: DatabaseConfig;
+  Provider: DatabaseProvider | undefined;
+  Migrations: Required<MigrationConfig>;
+  Placeholders: Record<string, string>;
+  TransactionMode: TransactionMode;
+  DryRun: boolean;
+};
+
+/**
+ * Merges user-provided config with sensible defaults.
+ * Default schema is dialect-aware: 'dbo' for SQL Server, 'public' for PostgreSQL.
+ *
+ * @param config - Partial configuration provided by the user
+ * @returns Complete configuration with all defaults applied
+ */
+export function resolveConfig(config: SkywayConfig): ResolvedSkywayConfig {
+  const dialect = config.Database.Dialect ?? 'sqlserver';
+  const defaultSchema = dialect === 'postgresql' ? 'public' : 'dbo';
+
   return {
     Database: config.Database,
+    Provider: config.Provider,
     Migrations: {
       Locations: config.Migrations.Locations,
-      DefaultSchema: config.Migrations.DefaultSchema ?? 'dbo',
+      DefaultSchema: config.Migrations.DefaultSchema ?? defaultSchema,
       HistoryTable: config.Migrations.HistoryTable ?? 'flyway_schema_history',
       BaselineVersion: config.Migrations.BaselineVersion ?? '1',
       BaselineOnMigrate: config.Migrations.BaselineOnMigrate ?? false,

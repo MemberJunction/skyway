@@ -77,4 +77,38 @@ describe('resolveConfig', () => {
     const resolved = resolveConfig(minimalConfig);
     expect(resolved.Database).toEqual(minimalConfig.Database);
   });
+
+  it('defaults to dbo schema for sqlserver dialect', () => {
+    const config: SkywayConfig = {
+      ...minimalConfig,
+      Database: { ...minimalConfig.Database, Dialect: 'sqlserver' },
+    };
+    const resolved = resolveConfig(config);
+    expect(resolved.Migrations.DefaultSchema).toBe('dbo');
+  });
+
+  it('defaults to public schema for postgresql dialect', () => {
+    const config: SkywayConfig = {
+      ...minimalConfig,
+      Database: { ...minimalConfig.Database, Dialect: 'postgresql' },
+    };
+    const resolved = resolveConfig(config);
+    expect(resolved.Migrations.DefaultSchema).toBe('public');
+  });
+
+  it('defaults to dbo schema when no dialect specified', () => {
+    const resolved = resolveConfig(minimalConfig);
+    expect(resolved.Migrations.DefaultSchema).toBe('dbo');
+  });
+
+  it('applies default DryRun as false', () => {
+    const resolved = resolveConfig(minimalConfig);
+    expect(resolved.DryRun).toBe(false);
+  });
+
+  it('preserves Provider when supplied', () => {
+    // Provider is optional — when not supplied, it's undefined
+    const resolved = resolveConfig(minimalConfig);
+    expect(resolved.Provider).toBeUndefined();
+  });
 });

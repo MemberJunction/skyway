@@ -1,27 +1,32 @@
 /**
  * @module @memberjunction/skyway-core
  *
- * Skyway — A TypeScript-native Flyway-compatible database migration engine
- * for SQL Server.
+ * Skyway — A TypeScript-native Flyway-compatible database migration engine.
+ *
+ * This is the core package containing the `Skyway` class, provider interfaces,
+ * migration types, and utilities. To connect to a specific database, install
+ * a provider package:
+ *
+ * - `@memberjunction/skyway-sqlserver` — SQL Server (mssql/tedious)
+ * - `@memberjunction/skyway-postgres` — PostgreSQL (pg)
  *
  * ## Quick Start
  *
  * ```typescript
  * import { Skyway } from '@memberjunction/skyway-core';
+ * import { SqlServerProvider } from '@memberjunction/skyway-sqlserver';
+ *
+ * const provider = new SqlServerProvider({
+ *   Server: 'localhost',
+ *   Database: 'my_app',
+ *   User: 'sa',
+ *   Password: 'secret',
+ * });
  *
  * const skyway = new Skyway({
- *   Database: {
- *     Server: 'localhost',
- *     Database: 'my_app',
- *     User: 'sa',
- *     Password: 'secret',
- *   },
- *   Migrations: {
- *     Locations: ['./migrations'],
- *     DefaultSchema: 'dbo',
- *     BaselineOnMigrate: true,
- *   },
- *   TransactionMode: 'per-run',
+ *   Database: { Server: 'localhost', Database: 'my_app', User: 'sa', Password: 'secret' },
+ *   Migrations: { Locations: ['./migrations'], DefaultSchema: 'dbo' },
+ *   Provider: provider,
  * });
  *
  * const result = await skyway.Migrate();
@@ -34,14 +39,32 @@
  */
 
 // ─── Main API ────────────────────────────────────────────────────────
-export { Skyway, MigrateResult, ValidateResult, CleanResult, BaselineResult, RepairResult, SkywayCallbacks } from './core/skyway';
+export {
+  Skyway,
+  MigrateResult,
+  MigrationExecutionResult,
+  ValidateResult,
+  CleanResult,
+  BaselineResult,
+  RepairResult,
+  SkywayCallbacks,
+} from './core/skyway';
+
+// ─── Provider Interface ─────────────────────────────────────────────
+export {
+  DatabaseProvider,
+  DatabaseDialect,
+  ProviderTransaction,
+  HistoryTableProvider,
+  HistoryInsertParams,
+  CleanOperation,
+} from './db/provider';
 
 // ─── Configuration ───────────────────────────────────────────────────
-export { SkywayConfig, MigrationConfig, TransactionMode } from './core/config';
+export { SkywayConfig, MigrationConfig, TransactionMode, ResolvedSkywayConfig } from './core/config';
 
-// ─── Database ────────────────────────────────────────────────────────
+// ─── Database Types ──────────────────────────────────────────────────
 export { DatabaseConfig, DatabaseConnectionOptions } from './db/types';
-export { ConnectionManager } from './db/connection';
 
 // ─── Migration Types ─────────────────────────────────────────────────
 export {
@@ -62,13 +85,11 @@ export {
 } from './migration/scanner';
 export { ResolveMigrations } from './migration/resolver';
 
-// ─── Executor ────────────────────────────────────────────────────────
+// ─── Executor Utilities ──────────────────────────────────────────────
 export { SplitOnGO, SQLBatch } from './executor/sql-splitter';
 export { SubstitutePlaceholders, PlaceholderContext } from './executor/placeholder';
-export { MigrationExecutionResult, ExecutionCallbacks } from './executor/executor';
 
-// ─── History ─────────────────────────────────────────────────────────
-export { HistoryTable } from './history/history-table';
+// ─── History Types ───────────────────────────────────────────────────
 export { HistoryRecord, HistoryRecordType } from './history/types';
 
 // ─── Errors ──────────────────────────────────────────────────────────

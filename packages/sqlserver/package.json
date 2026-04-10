@@ -1,26 +1,25 @@
 {
-  "name": "@memberjunction/skyway-cli",
+  "name": "@memberjunction/skyway-sqlserver",
   "version": "0.5.3",
-  "description": "CLI for Skyway — TypeScript-native Flyway-compatible database migrations",
+  "description": "SQL Server provider for the Skyway migration engine",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
     "dist"
   ],
-  "bin": {
-    "skyway": "./dist/bin/skyway.js"
-  },
   "scripts": {
     "build": "tsc",
     "clean": "rm -rf dist",
     "watch": "tsc --watch"
   },
   "keywords": [
+    "skyway",
     "flyway",
     "migration",
     "database",
     "sql-server",
-    "cli"
+    "mssql",
+    "typescript"
   ],
   "license": "MIT",
   "publishConfig": {
@@ -29,17 +28,14 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/MemberJunction/skyway.git",
-    "directory": "packages/cli"
+    "directory": "packages/sqlserver"
   },
   "dependencies": {
     "@memberjunction/skyway-core": "^0.5.3",
-    "@memberjunction/skyway-sqlserver": "^0.5.3",
-    "@memberjunction/skyway-postgres": "^0.5.3",
-    "commander": "^12.1.0",
-    "chalk": "^4.1.2",
-    "dotenv": "^16.4.5"
+    "mssql": "^11.0.1"
   },
   "devDependencies": {
+    "@types/mssql": "^9.1.5",
     "@types/node": "^20.0.0",
     "typescript": "^5.5.0"
   },

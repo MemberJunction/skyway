@@ -29,8 +29,10 @@ export async function RunMigrate(config: SkywayConfig, quiet: boolean = false): 
   }
 
   try {
-    LogInfo(`Database: ${config.Database.Server}:${config.Database.Port ?? 1433}/${config.Database.Database}`);
-    LogInfo(`Schema: ${config.Migrations.DefaultSchema ?? 'dbo'}`);
+    const defaultPort = config.Database.Dialect === 'postgresql' ? 5432 : 1433;
+    LogInfo(`Dialect: ${config.Database.Dialect ?? 'sqlserver'}`);
+    LogInfo(`Database: ${config.Database.Server}:${config.Database.Port ?? defaultPort}/${config.Database.Database}`);
+    LogInfo(`Schema: ${config.Migrations.DefaultSchema ?? (config.Database.Dialect === 'postgresql' ? 'public' : 'dbo')}`);
     LogInfo(`Locations: ${config.Migrations.Locations.join(', ')}`);
     LogInfo(`Transaction mode: ${config.TransactionMode ?? 'per-run'}`);
     if (config.DryRun) {
