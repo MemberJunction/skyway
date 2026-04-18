@@ -8,7 +8,7 @@
  */
 
 import * as sql from 'mssql';
-import { HistoryRecord, HistoryRecordType } from './types';
+import { HistoryExtraColumn, HistoryRecord, HistoryRecordType } from './types';
 import { ResolvedMigration } from '../migration/types';
 
 /**
@@ -22,20 +22,26 @@ export class HistoryTable {
   private readonly schema: string;
   private readonly tableName: string;
   private readonly pool: sql.ConnectionPool;
+  private readonly extraColumns: readonly HistoryExtraColumn[];
 
   /**
    * @param pool - Connected SQL Server connection pool
    * @param schema - Schema name (e.g., "__mj" or "dbo")
    * @param tableName - History table name (default: "flyway_schema_history")
+   * @param extraColumns - User-defined columns appended to the standard Flyway
+   *        columns. Created by `EnsureExists` and stamped by every `Insert*`
+   *        call when a `Value` is supplied.
    */
   constructor(
     pool: sql.ConnectionPool,
     schema: string,
-    tableName: string = 'flyway_schema_history'
+    tableName: string = 'flyway_schema_history',
+    extraColumns: readonly HistoryExtraColumn[] = []
   ) {
     this.pool = pool;
     this.schema = schema;
     this.tableName = tableName;
+    this.extraColumns = extraColumns;
   }
 
   /**
@@ -74,6 +80,7 @@ export class HistoryTable {
 
     // Create history table if it doesn't exist
     const createRequest = this.createRequest(connectionSource);
+    const extrasDDL = this.extraColumns.map(c => `,\n          ${this.extraColumnDDL(c)}`).join('');
     await createRequest.batch(`
       IF NOT EXISTS (
         SELECT 1 FROM INFORMATION_SCHEMA.TABLES
@@ -91,13 +98,58 @@ export class HistoryTable {
           [installed_on]    DATETIME       NOT NULL DEFAULT GETDATE(),
           [execution_time]  INT            NOT NULL,
           [success]         BIT            NOT NULL,
-          CONSTRAINT [${this.tableName}_pk] PRIMARY KEY ([installed_rank])
+          CONSTRAINT [${this.tableName}_pk] PRIMARY KEY ([installed_rank])${extrasDDL}
         );
 
         CREATE INDEX [${this.tableName}_s_idx]
           ON ${this.QualifiedName} ([success]);
       END
     `);
+  }
+
+  // ─── Extra-column helpers ─────────────────────────────────────────────
+
+  /**
+   * DDL fragment for one extra column, e.g.
+   * `[CompanyIntegrationID] UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID()`.
+   * Name and SqlType are written verbatim — caller supplies trusted config.
+   */
+  private extraColumnDDL(col: HistoryExtraColumn): string {
+    const nullable = col.IsNullable === false ? 'NOT NULL' : 'NULL';
+    const defaultClause = col.DefaultValue ? ` DEFAULT ${col.DefaultValue}` : '';
+    return `[${col.Name}] ${col.SqlType} ${nullable}${defaultClause}`;
+  }
+
+  /** Extras that have a `Value` — skyway stamps these onto every insert. */
+  private get stampedExtras(): readonly HistoryExtraColumn[] {
+    return this.extraColumns.filter(c => c.Value !== undefined);
+  }
+
+  /** Comma-led column list fragment for INSERT, e.g. `, [ColA], [ColB]`. */
+  private extraInsertColumns(): string {
+    const cols = this.stampedExtras;
+    return cols.length === 0 ? '' : ', ' + cols.map(c => `[${c.Name}]`).join(', ');
+  }
+
+  /** Comma-led values fragment for INSERT, e.g. `, @extra_ColA, @extra_ColB`. */
+  private extraInsertValues(): string {
+    const cols = this.stampedExtras;
+    return cols.length === 0 ? '' : ', ' + cols.map(c => `@${this.extraParamName(c.Name)}`).join(', ');
+  }
+
+  /**
+   * Binds stamped extras onto a request as `@extra_<Name>` parameters so
+   * they flow through mssql's parameterization (safe vs. SQL injection).
+   */
+  private bindExtraValues(request: sql.Request): void {
+    for (const col of this.stampedExtras) {
+      request.input(this.extraParamName(col.Name), col.Value);
+    }
+  }
+
+  /** Prefix avoids collision with core-column parameter names. */
+  private extraParamName(columnName: string): string {
+    return `extra_${columnName}`;
   }
 
   /**
@@ -162,6 +214,7 @@ export class HistoryTable {
     request.input('installedBy', sql.NVarChar(100), user);
     request.input('executionTime', sql.Int, 0);
     request.input('success', sql.Bit, true);
+    this.bindExtraValues(request);
 
     await request.query(`
       IF NOT EXISTS (
@@ -169,10 +222,10 @@ export class HistoryTable {
       )
       INSERT INTO ${this.QualifiedName}
         ([installed_rank], [version], [description], [type], [script],
-         [checksum], [installed_by], [execution_time], [success])
+         [checksum], [installed_by], [execution_time], [success]${this.extraInsertColumns()})
       VALUES
         (@installedRank, NULL, @description, @type, @script,
-         NULL, @installedBy, @executionTime, @success)
+         NULL, @installedBy, @executionTime, @success${this.extraInsertValues()})
     `);
   }
 
@@ -204,14 +257,15 @@ export class HistoryTable {
     request.input('installedBy', sql.NVarChar(100), user);
     request.input('executionTime', sql.Int, executionTimeMS);
     request.input('success', sql.Bit, true);
+    this.bindExtraValues(request);
 
     await request.query(`
       INSERT INTO ${this.QualifiedName}
         ([installed_rank], [version], [description], [type], [script],
-         [checksum], [installed_by], [execution_time], [success])
+         [checksum], [installed_by], [execution_time], [success]${this.extraInsertColumns()})
       VALUES
         (@installedRank, @version, @description, @type, @script,
-         @checksum, @installedBy, @executionTime, @success)
+         @checksum, @installedBy, @executionTime, @success${this.extraInsertValues()})
     `);
   }
 
@@ -243,14 +297,15 @@ export class HistoryTable {
     request.input('installedBy', sql.NVarChar(100), user);
     request.input('executionTime', sql.Int, executionTimeMS);
     request.input('success', sql.Bit, false);
+    this.bindExtraValues(request);
 
     await request.query(`
       INSERT INTO ${this.QualifiedName}
         ([installed_rank], [version], [description], [type], [script],
-         [checksum], [installed_by], [execution_time], [success])
+         [checksum], [installed_by], [execution_time], [success]${this.extraInsertColumns()})
       VALUES
         (@installedRank, @version, @description, @type, @script,
-         @checksum, @installedBy, @executionTime, @success)
+         @checksum, @installedBy, @executionTime, @success${this.extraInsertValues()})
     `);
   }
 
@@ -276,14 +331,15 @@ export class HistoryTable {
     request.input('installedBy', sql.NVarChar(100), user);
     request.input('executionTime', sql.Int, 0);
     request.input('success', sql.Bit, true);
+    this.bindExtraValues(request);
 
     await request.query(`
       INSERT INTO ${this.QualifiedName}
         ([installed_rank], [version], [description], [type], [script],
-         [checksum], [installed_by], [execution_time], [success])
+         [checksum], [installed_by], [execution_time], [success]${this.extraInsertColumns()})
       VALUES
         (@installedRank, @version, @description, @type, @script,
-         NULL, @installedBy, @executionTime, @success)
+         NULL, @installedBy, @executionTime, @success${this.extraInsertValues()})
     `);
   }
 

@@ -194,11 +194,7 @@ export class Skyway {
       await this.connectionManager.Connect();
       const pool = this.connectionManager.GetPool();
 
-      this.historyTable = new HistoryTable(
-        pool,
-        this.config.Migrations.DefaultSchema,
-        this.config.Migrations.HistoryTable
-      );
+      this.historyTable = this.buildHistoryTable(pool);
 
       // Ensure schema and history table exist (outside any migration transaction)
       await this.historyTable.EnsureExists();
@@ -325,11 +321,7 @@ export class Skyway {
     await this.connectionManager.Connect();
     const pool = this.connectionManager.GetPool();
 
-    this.historyTable = new HistoryTable(
-      pool,
-      this.config.Migrations.DefaultSchema,
-      this.config.Migrations.HistoryTable
-    );
+    this.historyTable = this.buildHistoryTable(pool);
 
     const discovered = await ScanAndResolveMigrations(
       this.config.Migrations.Locations
@@ -359,11 +351,7 @@ export class Skyway {
     await this.connectionManager.Connect();
     const pool = this.connectionManager.GetPool();
 
-    this.historyTable = new HistoryTable(
-      pool,
-      this.config.Migrations.DefaultSchema,
-      this.config.Migrations.HistoryTable
-    );
+    this.historyTable = this.buildHistoryTable(pool);
 
     const errors: string[] = [];
 
@@ -624,11 +612,7 @@ export class Skyway {
       await this.connectionManager.Connect();
       const pool = this.connectionManager.GetPool();
 
-      this.historyTable = new HistoryTable(
-        pool,
-        this.config.Migrations.DefaultSchema,
-        this.config.Migrations.HistoryTable
-      );
+      this.historyTable = this.buildHistoryTable(pool);
 
       await this.historyTable.EnsureExists();
 
@@ -687,11 +671,7 @@ export class Skyway {
       await this.connectionManager.Connect();
       const pool = this.connectionManager.GetPool();
 
-      this.historyTable = new HistoryTable(
-        pool,
-        this.config.Migrations.DefaultSchema,
-        this.config.Migrations.HistoryTable
-      );
+      this.historyTable = this.buildHistoryTable(pool);
 
       if (!(await this.historyTable.Exists())) {
         return {
@@ -773,6 +753,19 @@ export class Skyway {
   }
 
   // ─── Private Methods ──────────────────────────────────────────────
+
+  /**
+   * Constructs a HistoryTable bound to the current pool and config.
+   * Centralizes the wiring so every code path picks up `HistoryExtraColumns`.
+   */
+  private buildHistoryTable(pool: sql.ConnectionPool): HistoryTable {
+    return new HistoryTable(
+      pool,
+      this.config.Migrations.DefaultSchema,
+      this.config.Migrations.HistoryTable,
+      this.config.Migrations.HistoryExtraColumns
+    );
+  }
 
   /**
    * Executes pending migrations and records results in the history table.
