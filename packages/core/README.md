@@ -86,6 +86,42 @@ const skyway = new Skyway({
 });
 ```
 
+### Custom history columns
+
+The default history table carries the ten Flyway-compatible columns. When one database needs to track migrations across multiple logical contexts — for example, core application migrations alongside per-tenant or per-integration migrations — use a **second Skyway instance** with its own `HistoryTable` name. Both instances can share a schema without stepping on each other.
+
+Each non-default instance can also declare extra columns that carry domain context on every history row. Skyway creates the columns during `EnsureExists` and, when `Value` is supplied, stamps it (via parameter binding) onto every insert:
+
+```typescript
+const integrationSkyway = new Skyway({
+  Database: { /* ... */ },
+  Migrations: {
+    Locations: ['./integration-migrations'],
+    DefaultSchema: '__mj',
+    HistoryTable: 'IntegrationSchemaHistory',
+    HistoryExtraColumns: [
+      {
+        Name: 'CompanyIntegrationID',
+        SqlType: 'UNIQUEIDENTIFIER',
+        IsNullable: false,
+        Value: companyIntegrationId,   // stamped on every row in this run
+      },
+      {
+        Name: 'Notes',
+        SqlType: 'NVARCHAR(400)',
+        DefaultValue: "N''",           // no Value — falls through to DEFAULT
+      },
+    ],
+  },
+});
+```
+
+Rules:
+- Extras are **appended** to the Flyway columns; the core ten are never replaced.
+- Extras without a `Value` must be nullable or carry a `DefaultValue`.
+- `Value` is always bound as a SQL parameter — safe against injection regardless of source.
+- Changes to `HistoryExtraColumns` only take effect on a table Skyway creates. Pre-existing history tables are not altered; either drop the table or add the columns manually.
+
 ### Progress Callbacks
 
 ```typescript

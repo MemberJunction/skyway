@@ -69,7 +69,7 @@ export { MigrationExecutionResult, ExecutionCallbacks } from './executor/executo
 
 // ─── History ─────────────────────────────────────────────────────────
 export { HistoryTable } from './history/history-table';
-export { HistoryRecord, HistoryRecordType } from './history/types';
+export { HistoryRecord, HistoryRecordType, HistoryExtraColumn } from './history/types';
 
 // ─── Errors ──────────────────────────────────────────────────────────
 export {

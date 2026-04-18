@@ -4,6 +4,9 @@
  */
 
 import { DatabaseConfig } from '../db/types';
+import { HistoryExtraColumn } from '../history/types';
+
+export type { HistoryExtraColumn };
 
 /**
  * Controls how transactions are applied during a migration run.
@@ -86,6 +89,23 @@ export interface MigrationConfig {
   HistoryTable?: string;
 
   /**
+   * Additional columns to add to the history table beyond the standard Flyway
+   * set. Skyway creates these columns during `EnsureExists` and, when each
+   * column's `Value` is supplied, writes it on every history-row insert
+   * during the run.
+   *
+   * Use this to make the history table carry domain context — for example,
+   * a `CompanyIntegrationID UNIQUEIDENTIFIER` column that links each migration
+   * row to the integration that triggered it. Values are bound as SQL
+   * parameters (safe against injection).
+   *
+   * Extras are always appended to the row shape; they never replace core
+   * Flyway columns. Extras without a `Value` must be nullable or carry a
+   * `DefaultValue`.
+   */
+  HistoryExtraColumns?: HistoryExtraColumn[];
+
+  /**
    * Version string for baseline migrations.
    * When `BaselineOnMigrate` is true and the database has no history,
    * a baseline entry is recorded at this version.
@@ -123,6 +143,7 @@ export function resolveConfig(config: SkywayConfig): Required<SkywayConfig> & { 
       Locations: config.Migrations.Locations,
       DefaultSchema: config.Migrations.DefaultSchema ?? 'dbo',
       HistoryTable: config.Migrations.HistoryTable ?? 'flyway_schema_history',
+      HistoryExtraColumns: config.Migrations.HistoryExtraColumns ?? [],
       BaselineVersion: config.Migrations.BaselineVersion ?? '1',
       BaselineOnMigrate: config.Migrations.BaselineOnMigrate ?? false,
       OutOfOrder: config.Migrations.OutOfOrder ?? false,

@@ -49,6 +49,47 @@ describe('resolveConfig', () => {
     expect(resolved.Placeholders).toEqual({});
   });
 
+  it('applies default empty HistoryExtraColumns', () => {
+    const resolved = resolveConfig(minimalConfig);
+    expect(resolved.Migrations.HistoryExtraColumns).toEqual([]);
+  });
+
+  it('preserves HistoryExtraColumns with values and defaults', () => {
+    const config: SkywayConfig = {
+      ...minimalConfig,
+      Migrations: {
+        ...minimalConfig.Migrations,
+        HistoryTable: 'IntegrationSchemaHistory',
+        HistoryExtraColumns: [
+          {
+            Name: 'CompanyIntegrationID',
+            SqlType: 'UNIQUEIDENTIFIER',
+            IsNullable: false,
+            Value: 'A1B2C3D4-E5F6-7890-ABCD-EF1234567890',
+          },
+          {
+            Name: 'TriggeredBy',
+            SqlType: 'NVARCHAR(200)',
+            DefaultValue: "N'system'",
+          },
+        ],
+      },
+    };
+    const resolved = resolveConfig(config);
+    expect(resolved.Migrations.HistoryTable).toBe('IntegrationSchemaHistory');
+    expect(resolved.Migrations.HistoryExtraColumns).toHaveLength(2);
+    expect(resolved.Migrations.HistoryExtraColumns[0]).toMatchObject({
+      Name: 'CompanyIntegrationID',
+      SqlType: 'UNIQUEIDENTIFIER',
+      IsNullable: false,
+      Value: 'A1B2C3D4-E5F6-7890-ABCD-EF1234567890',
+    });
+    expect(resolved.Migrations.HistoryExtraColumns[1]).toMatchObject({
+      Name: 'TriggeredBy',
+      DefaultValue: "N'system'",
+    });
+  });
+
   it('preserves user-specified values', () => {
     const config: SkywayConfig = {
       ...minimalConfig,
