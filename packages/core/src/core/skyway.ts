@@ -36,7 +36,6 @@ import { ScanAndResolveMigrations } from '../migration/scanner';
 import { ResolveMigrations, ResolverResult } from '../migration/resolver';
 import { ResolvedMigration, MigrationStatus } from '../migration/types';
 import { SubstitutePlaceholders, PlaceholderContext } from '../executor/placeholder';
-import { TransactionError } from './errors';
 
 /**
  * Result of a `Migrate()` operation.

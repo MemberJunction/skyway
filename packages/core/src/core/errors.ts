@@ -103,7 +103,9 @@ export class TransactionError extends SkywayError {
 }
 
 /**
- * Thrown when the connection to SQL Server cannot be established.
+ * Thrown when the database connection cannot be established.
+ * Raised by any provider (SQL Server, PostgreSQL, etc.) when its driver
+ * fails to open a connection.
  */
 export class ConnectionError extends SkywayError {
   constructor(message: string, cause?: Error) {

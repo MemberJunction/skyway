@@ -81,6 +81,11 @@ export class PostgresProvider implements DatabaseProvider {
   // ─── Database-Level Operations ─────────────────────────────────────
 
   async DatabaseExists(dbName: string): Promise<boolean> {
+    // Validate for consistency with CreateDatabase/DropDatabase, even though
+    // the query below uses a parameterized value — keeping the contract
+    // uniform across all three DB-name-taking methods makes caller expectations
+    // less surprising.
+    validateSqlIdentifier(dbName, 'database');
     const systemPool = await this.connectToSystemDb();
     try {
       const result = await systemPool.query(

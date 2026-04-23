@@ -4,7 +4,7 @@
  */
 
 import { Skyway, SkywayConfig, ScanAndResolveMigrations } from '@memberjunction/skyway-core';
-import { LogInfo, LogSuccess, LogError } from '../formatting';
+import { LogInfo, LogSuccess, LogError, LogConnectionInfo } from '../formatting';
 
 /**
  * Executes the baseline command: marks the database as baselined at a version.
@@ -31,8 +31,7 @@ export async function RunBaseline(config: SkywayConfig, version?: string): Promi
   skyway.OnProgress({ OnLog: LogInfo });
 
   try {
-    LogInfo(`Database: ${config.Database.Server}:${config.Database.Port ?? 1433}/${config.Database.Database}`);
-    LogInfo(`Schema: ${config.Migrations.DefaultSchema ?? 'dbo'}`);
+    LogConnectionInfo(config);
     LogInfo(`Baseline version: ${effectiveVersion}`);
     console.log();
 

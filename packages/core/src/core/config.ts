@@ -124,12 +124,9 @@ export interface MigrationConfig {
 }
 
 /**
- * Merges user-provided config with sensible defaults.
- * @param config - Partial configuration provided by the user
- * @returns Complete configuration with all defaults applied
- */
-/**
  * Resolved configuration type with all defaults applied.
+ * Every optional field in `SkywayConfig` has been filled in with either
+ * the caller-provided value or the dialect-aware default.
  */
 export type ResolvedSkywayConfig = {
   Database: DatabaseConfig;

@@ -90,7 +90,7 @@ export {
   ResolveMigration,
   ScanAndResolveMigrations,
 } from './migration/scanner';
-export { ResolveMigrations } from './migration/resolver';
+export { ResolveMigrations, ResolverResult } from './migration/resolver';
 
 // ─── Executor Utilities ──────────────────────────────────────────────
 export { SplitOnGO, SQLBatch } from './executor/sql-splitter';
