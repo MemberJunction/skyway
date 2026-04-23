@@ -66,6 +66,13 @@ export { SkywayConfig, MigrationConfig, TransactionMode, ResolvedSkywayConfig } 
 // ─── Database Types ──────────────────────────────────────────────────
 export { DatabaseConfig, DatabaseConnectionOptions } from './db/types';
 
+// ─── Identifier Validation (injection-safe SQL string interpolation) ─
+export {
+  validateSqlIdentifier,
+  SQL_IDENTIFIER_PATTERN,
+  SQL_IDENTIFIER_MAX_LENGTH,
+} from './db/identifier';
+
 // ─── Migration Types ─────────────────────────────────────────────────
 export {
   MigrationType,

@@ -19,6 +19,7 @@ import {
 import { DatabaseConfig } from '@memberjunction/skyway-core';
 import { HistoryRecord } from '@memberjunction/skyway-core';
 import { SplitOnGO, SQLBatch } from '@memberjunction/skyway-core';
+import { validateSqlIdentifier } from '@memberjunction/skyway-core';
 
 /**
  * SQL Server provider for Skyway.
@@ -94,10 +95,16 @@ export class SqlServerProvider implements DatabaseProvider {
   // ─── Database-Level Operations ─────────────────────────────────────
 
   async DatabaseExists(dbName: string): Promise<boolean> {
+    validateSqlIdentifier(dbName, 'database');
     const masterPool = await this.connectToMaster();
     try {
-      const request = new sql.Request(masterPool);
-      const result = await request.query(`SELECT DB_ID('${dbName}') AS dbid`);
+      // DB_ID takes a string value, so we can parameterize this part safely.
+      // The validation above defends callers from injection upstream; the
+      // parameterized query here defends us from quoting bugs (e.g. a name
+      // that happens to end in an apostrophe).
+      const result = await new sql.Request(masterPool)
+        .input('dbName', sql.NVarChar, dbName)
+        .query('SELECT DB_ID(@dbName) AS dbid');
       return result.recordset[0].dbid !== null;
     } finally {
       await masterPool.close();
@@ -105,11 +112,15 @@ export class SqlServerProvider implements DatabaseProvider {
   }
 
   async CreateDatabase(dbName: string): Promise<void> {
+    // `CREATE DATABASE [name]` cannot be parameterized — SQL binds values, not
+    // identifiers. `validateSqlIdentifier` ensures the name is a plain
+    // identifier before interpolation.
+    validateSqlIdentifier(dbName, 'database');
     const masterPool = await this.connectToMaster();
     try {
-      const result = await new sql.Request(masterPool).query(
-        `SELECT DB_ID('${dbName}') AS dbid`
-      );
+      const result = await new sql.Request(masterPool)
+        .input('dbName', sql.NVarChar, dbName)
+        .query('SELECT DB_ID(@dbName) AS dbid');
       if (result.recordset[0].dbid === null) {
         await new sql.Request(masterPool).batch(`CREATE DATABASE [${dbName}]`);
       }
@@ -119,11 +130,12 @@ export class SqlServerProvider implements DatabaseProvider {
   }
 
   async DropDatabase(dbName: string): Promise<void> {
+    validateSqlIdentifier(dbName, 'database');
     const masterPool = await this.connectToMaster();
     try {
-      const result = await new sql.Request(masterPool).query(
-        `SELECT DB_ID('${dbName}') AS dbid`
-      );
+      const result = await new sql.Request(masterPool)
+        .input('dbName', sql.NVarChar, dbName)
+        .query('SELECT DB_ID(@dbName) AS dbid');
       if (result.recordset[0].dbid !== null) {
         await new sql.Request(masterPool).batch(`
           ALTER DATABASE [${dbName}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
@@ -172,16 +184,25 @@ export class SqlServerProvider implements DatabaseProvider {
   // ─── Schema Cleanup ────────────────────────────────────────────────
 
   async GetCleanOperations(schema: string): Promise<CleanOperation[]> {
+    // Validate once at entry — `schema` is interpolated into DROP statements
+    // below (identifiers can't be parameterized), so injection-safety hinges
+    // on this check. Row values (e.g. `row.TableName`, `row.FKName`) come
+    // from system catalogs so they're trusted.
+    validateSqlIdentifier(schema, 'schema');
+
     const pool = this.getPool();
     const operations: CleanOperation[] = [];
 
     // 1. Drop foreign key constraints
-    const fkResult = await pool.request().query(`
-      SELECT fk.name AS FKName, OBJECT_NAME(fk.parent_object_id) AS TableName
-      FROM sys.foreign_keys fk
-      JOIN sys.tables t ON fk.parent_object_id = t.object_id
-      WHERE SCHEMA_NAME(t.schema_id) = '${schema}'
-    `);
+    const fkResult = await pool
+      .request()
+      .input('schema', sql.NVarChar, schema)
+      .query(`
+        SELECT fk.name AS FKName, OBJECT_NAME(fk.parent_object_id) AS TableName
+        FROM sys.foreign_keys fk
+        JOIN sys.tables t ON fk.parent_object_id = t.object_id
+        WHERE SCHEMA_NAME(t.schema_id) = @schema
+      `);
     for (const row of fkResult.recordset) {
       operations.push({
         SQL: `ALTER TABLE [${schema}].[${row.TableName}] DROP CONSTRAINT [${row.FKName}]`,
@@ -190,9 +211,10 @@ export class SqlServerProvider implements DatabaseProvider {
     }
 
     // 2. Drop views
-    const viewResult = await pool.request().query(`
-      SELECT name FROM sys.views WHERE schema_id = SCHEMA_ID('${schema}')
-    `);
+    const viewResult = await pool
+      .request()
+      .input('schema', sql.NVarChar, schema)
+      .query('SELECT name FROM sys.views WHERE schema_id = SCHEMA_ID(@schema)');
     for (const row of viewResult.recordset) {
       operations.push({
         SQL: `DROP VIEW [${schema}].[${row.name}]`,
@@ -201,9 +223,10 @@ export class SqlServerProvider implements DatabaseProvider {
     }
 
     // 3. Drop stored procedures
-    const spResult = await pool.request().query(`
-      SELECT name FROM sys.procedures WHERE schema_id = SCHEMA_ID('${schema}')
-    `);
+    const spResult = await pool
+      .request()
+      .input('schema', sql.NVarChar, schema)
+      .query('SELECT name FROM sys.procedures WHERE schema_id = SCHEMA_ID(@schema)');
     for (const row of spResult.recordset) {
       operations.push({
         SQL: `DROP PROCEDURE [${schema}].[${row.name}]`,
@@ -212,11 +235,14 @@ export class SqlServerProvider implements DatabaseProvider {
     }
 
     // 4. Drop functions
-    const fnResult = await pool.request().query(`
-      SELECT name FROM sys.objects
-      WHERE schema_id = SCHEMA_ID('${schema}')
-        AND type IN ('FN', 'IF', 'TF')
-    `);
+    const fnResult = await pool
+      .request()
+      .input('schema', sql.NVarChar, schema)
+      .query(`
+        SELECT name FROM sys.objects
+        WHERE schema_id = SCHEMA_ID(@schema)
+          AND type IN ('FN', 'IF', 'TF')
+      `);
     for (const row of fnResult.recordset) {
       operations.push({
         SQL: `DROP FUNCTION [${schema}].[${row.name}]`,
@@ -225,10 +251,13 @@ export class SqlServerProvider implements DatabaseProvider {
     }
 
     // 5. Drop user-defined types
-    const typeResult = await pool.request().query(`
-      SELECT name FROM sys.types
-      WHERE schema_id = SCHEMA_ID('${schema}') AND is_user_defined = 1
-    `);
+    const typeResult = await pool
+      .request()
+      .input('schema', sql.NVarChar, schema)
+      .query(`
+        SELECT name FROM sys.types
+        WHERE schema_id = SCHEMA_ID(@schema) AND is_user_defined = 1
+      `);
     for (const row of typeResult.recordset) {
       operations.push({
         SQL: `DROP TYPE [${schema}].[${row.name}]`,
@@ -237,9 +266,10 @@ export class SqlServerProvider implements DatabaseProvider {
     }
 
     // 6. Drop tables
-    const tableResult = await pool.request().query(`
-      SELECT name FROM sys.tables WHERE schema_id = SCHEMA_ID('${schema}')
-    `);
+    const tableResult = await pool
+      .request()
+      .input('schema', sql.NVarChar, schema)
+      .query('SELECT name FROM sys.tables WHERE schema_id = SCHEMA_ID(@schema)');
     for (const row of tableResult.recordset) {
       operations.push({
         SQL: `DROP TABLE [${schema}].[${row.name}]`,
@@ -254,11 +284,13 @@ export class SqlServerProvider implements DatabaseProvider {
     if (schema.toLowerCase() === 'dbo') {
       return; // Never drop the built-in dbo schema
     }
+    validateSqlIdentifier(schema, 'schema');
 
     const pool = this.getPool();
-    const result = await pool.request().query(
-      `SELECT COUNT(*) AS cnt FROM sys.schemas WHERE name = '${schema}'`
-    );
+    const result = await pool
+      .request()
+      .input('schema', sql.NVarChar, schema)
+      .query('SELECT COUNT(*) AS cnt FROM sys.schemas WHERE name = @schema');
     if (result.recordset[0].cnt > 0) {
       await pool.request().batch(`DROP SCHEMA [${schema}]`);
     }
@@ -367,6 +399,11 @@ class SqlServerHistoryProvider implements HistoryTableProvider {
   }
 
   private qualifiedName(schema: string, tableName: string): string {
+    // Validators also run at public entry points, but this is cheap defense
+    // in depth — every call that produces a `[schema].[table]` identifier
+    // passes through here.
+    validateSqlIdentifier(schema, 'schema');
+    validateSqlIdentifier(tableName, 'history table');
     return `[${schema}].[${tableName}]`;
   }
 
@@ -379,12 +416,15 @@ class SqlServerHistoryProvider implements HistoryTableProvider {
   }
 
   async EnsureExists(schema: string, tableName: string, txn?: ProviderTransaction): Promise<void> {
-    const qualifiedName = this.qualifiedName(schema, tableName);
+    const qualifiedName = this.qualifiedName(schema, tableName); // validates both inputs
 
-    // Create schema if it doesn't exist
+    // Create schema if it doesn't exist. The EXISTS check uses a parameterized
+    // value; the CREATE SCHEMA statement must interpolate the identifier but
+    // we've already validated `schema` above.
     const schemaRequest = this.createRequest(txn);
+    schemaRequest.input('schemaName', sql.NVarChar, schema);
     await schemaRequest.batch(`
-      IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = '${schema}')
+      IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = @schemaName)
       BEGIN
         EXEC('CREATE SCHEMA [${schema}]')
       END
@@ -392,10 +432,12 @@ class SqlServerHistoryProvider implements HistoryTableProvider {
 
     // Create history table if it doesn't exist
     const tableRequest = this.createRequest(txn);
+    tableRequest.input('schemaName', sql.NVarChar, schema);
+    tableRequest.input('tableName', sql.NVarChar, tableName);
     await tableRequest.batch(`
       IF NOT EXISTS (
         SELECT 1 FROM INFORMATION_SCHEMA.TABLES
-        WHERE TABLE_SCHEMA = '${schema}' AND TABLE_NAME = '${tableName}'
+        WHERE TABLE_SCHEMA = @schemaName AND TABLE_NAME = @tableName
       )
       BEGIN
         CREATE TABLE ${qualifiedName} (
@@ -419,12 +461,17 @@ class SqlServerHistoryProvider implements HistoryTableProvider {
   }
 
   async Exists(schema: string, tableName: string): Promise<boolean> {
+    validateSqlIdentifier(schema, 'schema');
+    validateSqlIdentifier(tableName, 'history table');
     const pool = this.provider.getPool();
-    const result = await new sql.Request(pool).query(`
-      SELECT COUNT(*) AS cnt
-      FROM INFORMATION_SCHEMA.TABLES
-      WHERE TABLE_SCHEMA = '${schema}' AND TABLE_NAME = '${tableName}'
-    `);
+    const result = await new sql.Request(pool)
+      .input('schemaName', sql.NVarChar, schema)
+      .input('tableName', sql.NVarChar, tableName)
+      .query(`
+        SELECT COUNT(*) AS cnt
+        FROM INFORMATION_SCHEMA.TABLES
+        WHERE TABLE_SCHEMA = @schemaName AND TABLE_NAME = @tableName
+      `);
     return result.recordset[0].cnt > 0;
   }
 

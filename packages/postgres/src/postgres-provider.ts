@@ -19,6 +19,7 @@ import {
 import { DatabaseConfig } from '@memberjunction/skyway-core';
 import { HistoryRecord } from '@memberjunction/skyway-core';
 import { SQLBatch } from '@memberjunction/skyway-core';
+import { validateSqlIdentifier } from '@memberjunction/skyway-core';
 
 /**
  * PostgreSQL provider for Skyway.
@@ -93,6 +94,7 @@ export class PostgresProvider implements DatabaseProvider {
   }
 
   async CreateDatabase(dbName: string): Promise<void> {
+    validateSqlIdentifier(dbName, 'database');
     const systemPool = await this.connectToSystemDb();
     try {
       const exists = await systemPool.query(
@@ -100,7 +102,8 @@ export class PostgresProvider implements DatabaseProvider {
         [dbName]
       );
       if (exists.rowCount === 0 || exists.rowCount === null) {
-        // Database names cannot be parameterized in CREATE DATABASE
+        // Database names cannot be parameterized in CREATE DATABASE;
+        // validateSqlIdentifier above guarantees the interpolation is safe.
         await systemPool.query(`CREATE DATABASE "${dbName}"`);
       }
     } finally {
@@ -109,6 +112,7 @@ export class PostgresProvider implements DatabaseProvider {
   }
 
   async DropDatabase(dbName: string): Promise<void> {
+    validateSqlIdentifier(dbName, 'database');
     const systemPool = await this.connectToSystemDb();
     try {
       const exists = await systemPool.query(
@@ -176,6 +180,10 @@ export class PostgresProvider implements DatabaseProvider {
   // ─── Schema Cleanup ────────────────────────────────────────────────
 
   async GetCleanOperations(schema: string): Promise<CleanOperation[]> {
+    // Validate once at entry — `schema` is interpolated into DROP statements
+    // below (identifiers can't be parameterized). Row values (`row.table_name`
+    // etc.) come from the system catalog so they're trusted.
+    validateSqlIdentifier(schema, 'schema');
     const pool = this.getPool();
     const operations: CleanOperation[] = [];
 
@@ -286,6 +294,7 @@ export class PostgresProvider implements DatabaseProvider {
     if (schema.toLowerCase() === 'public') {
       return; // Never drop the built-in public schema
     }
+    validateSqlIdentifier(schema, 'schema');
 
     const pool = this.getPool();
     const result = await pool.query(
@@ -408,6 +417,11 @@ class PostgresHistoryProvider implements HistoryTableProvider {
   }
 
   private qualifiedName(schema: string, tableName: string): string {
+    // Validators also run at public entry points, but this is cheap defense
+    // in depth — every call that produces a `"schema"."table"` identifier
+    // passes through here.
+    validateSqlIdentifier(schema, 'schema');
+    validateSqlIdentifier(tableName, 'history table');
     return `"${schema}"."${tableName}"`;
   }
 
@@ -422,8 +436,11 @@ class PostgresHistoryProvider implements HistoryTableProvider {
   }
 
   async EnsureExists(schema: string, tableName: string, txn?: ProviderTransaction): Promise<void> {
+    // Validate identifiers BEFORE acquiring the executor. Pool-not-connected
+    // errors are caller config problems; injection-shaped input is a caller
+    // contract violation and should surface first so debugging is easier.
+    const qualifiedName = this.qualifiedName(schema, tableName); // validates both
     const executor = this.getExecutor(txn);
-    const qualifiedName = this.qualifiedName(schema, tableName);
 
     // Create schema if it doesn't exist
     await executor.query(`CREATE SCHEMA IF NOT EXISTS "${schema}"`);
@@ -453,6 +470,8 @@ class PostgresHistoryProvider implements HistoryTableProvider {
   }
 
   async Exists(schema: string, tableName: string): Promise<boolean> {
+    validateSqlIdentifier(schema, 'schema');
+    validateSqlIdentifier(tableName, 'history table');
     const pool = this.provider.getPool();
     const result = await pool.query(
       `SELECT COUNT(*) AS cnt

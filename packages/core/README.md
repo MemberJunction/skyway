@@ -1,19 +1,34 @@
 # @memberjunction/skyway-core
 
-A TypeScript-native database migration engine for SQL Server, compatible with [Flyway](https://flywaydb.org/) migration files and history tables.
+A TypeScript-native database migration engine compatible with [Flyway](https://flywaydb.org/) migration files and history tables. Supports **SQL Server and PostgreSQL** through a pluggable `DatabaseProvider` interface.
 
 Skyway eliminates the Java dependency required by Flyway while providing the same migration workflow — versioned migrations, baseline support, repeatable migrations, checksum validation, and schema history tracking.
 
 ## Installation
 
+The `core` package is dialect-agnostic. Install it alongside a provider package for your database:
+
 ```bash
-npm install @memberjunction/skyway-core
+# SQL Server
+npm install @memberjunction/skyway-core @memberjunction/skyway-sqlserver
+
+# PostgreSQL
+npm install @memberjunction/skyway-core @memberjunction/skyway-postgres
 ```
 
 ## Quick Start
 
 ```typescript
 import { Skyway } from '@memberjunction/skyway-core';
+import { SqlServerProvider } from '@memberjunction/skyway-sqlserver';
+// import { PostgresProvider } from '@memberjunction/skyway-postgres';
+
+const provider = new SqlServerProvider({
+  Server: 'localhost',
+  Database: 'my_app',
+  User: 'sa',
+  Password: 'secret',
+});
 
 const skyway = new Skyway({
   Database: {
@@ -28,6 +43,7 @@ const skyway = new Skyway({
     BaselineOnMigrate: true,
   },
   TransactionMode: 'per-run',
+  Provider: provider,
 });
 
 const result = await skyway.Migrate();
@@ -35,6 +51,10 @@ console.log(`Applied ${result.MigrationsApplied} migrations`);
 
 await skyway.Close();
 ```
+
+## Security — identifier validation
+
+Provider implementations interpolate schema names, table names, and database names into SQL (identifiers can't be parameterized by the driver's prepared-statement API). To keep that safe, `skyway-core` exports `validateSqlIdentifier()`, a strict `/^[A-Za-z_][A-Za-z_0-9]*$/` whitelist with a 128-character cap. All built-in providers call it at every public entry point that takes an identifier from a caller, so invalid or injection-shaped input is rejected before any SQL is built. Custom providers should do the same.
 
 ## API
 
