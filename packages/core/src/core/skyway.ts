@@ -129,6 +129,9 @@ export interface SkywayCallbacks {
   /** Called when a migration finishes (success or failure) */
   OnMigrationEnd?: (result: MigrationExecutionResult) => void;
 
+  /** Called after each SQL batch completes successfully (verbose mode) */
+  OnBatchEnd?: (batchIndex: number, totalBatches: number) => void;
+
   /** Called for informational log messages */
   OnLog?: (message: string) => void;
 }
@@ -939,6 +942,8 @@ export class Skyway {
     const { SubstitutePlaceholders } = await import('../executor/placeholder');
     const { SplitOnGO } = await import('../executor/sql-splitter');
     const { ComputeChecksum } = await import('../migration/checksum');
+    const { ExtractErrorIdentifiers, FindContextLines } = await import('../executor/error-context');
+    const { MigrationExecutionError } = await import('./errors');
 
     const startTime = Date.now();
 
@@ -973,9 +978,46 @@ export class Skyway {
       for (let i = 0; i < batches.length; i++) {
         const batch = batches[i];
         for (let repeat = 0; repeat < batch.RepeatCount; repeat++) {
-          const request = new sql.Request(transaction);
-          await request.batch(batch.SQL);
+          try {
+            const request = new sql.Request(transaction);
+            await request.batch(batch.SQL);
+          } catch (batchErr) {
+            const elapsedMS = Date.now() - startTime;
+            const errorMessage = batchErr instanceof Error ? batchErr.message : String(batchErr);
+
+            // Extract identifiers from error and find related lines
+            const identifiers = ExtractErrorIdentifiers(errorMessage);
+            const contextLines = FindContextLines(batch.SQL, batch.StartLine, identifiers);
+
+            const batchInfo = {
+              BatchNumber: i + 1,
+              TotalBatches: batches.length,
+              StartLine: batch.StartLine,
+              EndLine: batch.EndLine,
+              SucceededBatches: i,
+              BatchSQL: batch.SQL,
+              ContextLines: contextLines.length > 0 ? contextLines : undefined,
+            };
+
+            const error = new MigrationExecutionError(
+              migration.Version,
+              migration.ScriptPath,
+              `Failed at batch ${i + 1}/${batches.length} (lines ${batch.StartLine}-${batch.EndLine}): ${errorMessage}`,
+              batch.SQL.substring(0, 500),
+              batchErr instanceof Error ? batchErr : undefined,
+              batchInfo
+            );
+
+            return {
+              Migration: migration,
+              Success: false,
+              ExecutionTimeMS: elapsedMS,
+              Error: error,
+            };
+          }
         }
+
+        this.callbacks.OnBatchEnd?.(i + 1, batches.length);
       }
 
       return {

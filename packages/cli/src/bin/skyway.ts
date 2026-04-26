@@ -48,7 +48,8 @@ function addSharedOptions(cmd: Command): Command {
     .option('--config <path>', 'Path to config file')
     .option('--placeholder <key=value>', 'Set a placeholder (repeatable)', collect, [])
     .option('--dry-run', 'Show pending migrations without executing them')
-    .option('-q, --quiet', 'Suppress per-migration output, show summary only');
+    .option('-q, --quiet', 'Suppress per-migration output, show summary only')
+    .option('-v, --verbose', 'Enable verbose output with per-batch progress and detailed error context');
 }
 
 // ─── Commands ───────────────────────────────────────────────────────
@@ -60,7 +61,7 @@ addSharedOptions(
 ).action(async (opts) => {
   PrintBanner();
   const config = LoadConfig(mapOptions(opts));
-  const success = await RunMigrate(config, opts.quiet ?? false);
+  const success = await RunMigrate(config, opts.quiet ?? false, opts.verbose ?? false);
   process.exit(success ? 0 : 1);
 });
 
@@ -183,6 +184,7 @@ function mapOptions(opts: Record<string, unknown>): CLIOptions {
     Config: opts.config as string | undefined,
     Placeholders: opts.placeholder as string[] | undefined,
     DryRun: opts.dryRun as boolean | undefined,
+    Verbose: opts.verbose as boolean | undefined,
   };
 }
 

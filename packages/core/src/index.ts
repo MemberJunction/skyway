@@ -66,6 +66,7 @@ export { ResolveMigrations } from './migration/resolver';
 export { SplitOnGO, SQLBatch } from './executor/sql-splitter';
 export { SubstitutePlaceholders, PlaceholderContext } from './executor/placeholder';
 export { MigrationExecutionResult, ExecutionCallbacks } from './executor/executor';
+export { ExtractErrorIdentifiers, FindContextLines, TruncateSQL, ContextLine } from './executor/error-context';
 
 // ─── History ─────────────────────────────────────────────────────────
 export { HistoryTable } from './history/history-table';
@@ -79,4 +80,5 @@ export {
   ChecksumMismatchError,
   TransactionError,
   ConnectionError,
+  FailedBatchInfo,
 } from './core/errors';

@@ -72,6 +72,21 @@ describe('SplitOnGO', () => {
     expect(batches[1].StartLine).toBe(3);
   });
 
+  it('tracks correct EndLine for each batch', () => {
+    const script = 'SELECT 1;\nGO\nSELECT 2;\nSELECT 3;\nGO';
+    const batches = SplitOnGO(script);
+    // Batch 1: line 1 (SELECT 1;), GO is on line 2
+    expect(batches[0].EndLine).toBe(1);
+    // Batch 2: lines 3-4 (SELECT 2; SELECT 3;), GO is on line 5
+    expect(batches[1].EndLine).toBe(4);
+  });
+
+  it('tracks EndLine for final batch without trailing GO', () => {
+    const script = 'SELECT 1;\nGO\nSELECT 2;\nSELECT 3;';
+    const batches = SplitOnGO(script);
+    expect(batches[1].EndLine).toBe(4); // total lines = 4
+  });
+
   it('handles empty input', () => {
     const batches = SplitOnGO('');
     expect(batches).toHaveLength(0);
