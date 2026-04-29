@@ -168,15 +168,18 @@ export class PostgresProvider implements DatabaseProvider {
 
   SplitScript(script: string): SQLBatch[] {
     // PostgreSQL does not use GO batch separators.
-    // Return the entire script as a single batch.
+    // Return the entire script as a single batch. EndLine is the line count
+    // of the trimmed script so error-context line ranges still resolve.
     const trimmed = script.trim();
     if (trimmed.length === 0) {
       return [];
     }
+    const lineCount = trimmed.split('\n').length;
     return [{
       SQL: trimmed,
       RepeatCount: 1,
       StartLine: 1,
+      EndLine: lineCount,
     }];
   }
 

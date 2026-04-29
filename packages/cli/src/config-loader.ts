@@ -75,6 +75,9 @@ export interface CLIOptions {
 
   /** Dry-run mode */
   DryRun?: boolean;
+
+  /** Verbose output mode */
+  Verbose?: boolean;
 }
 
 /**
@@ -201,6 +204,7 @@ export function LoadConfig(cliOptions: CLIOptions, cwd: string = process.cwd()):
       ?? fileConfig?.TransactionMode
       ?? 'per-run',
     DryRun: cliOptions.DryRun ?? fileConfig?.DryRun ?? false,
+    Verbose: cliOptions.Verbose ?? fileConfig?.Verbose ?? false,
   };
 }
 
@@ -285,6 +289,7 @@ const KEY_MAP: Record<string, string> = {
   placeholders: 'Placeholders',
   transactionMode: 'TransactionMode',
   dryRun: 'DryRun',
+  verbose: 'Verbose',
 };
 
 /**

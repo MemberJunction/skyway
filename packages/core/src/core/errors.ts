@@ -22,6 +22,32 @@ export class SkywayError extends Error {
 }
 
 /**
+ * Details about the failed SQL batch for enhanced error reporting.
+ */
+export interface FailedBatchInfo {
+  /** 1-based index of the failed batch */
+  BatchNumber: number;
+
+  /** Total number of batches in the migration */
+  TotalBatches: number;
+
+  /** 1-based line number where the batch starts in the original file */
+  StartLine: number;
+
+  /** 1-based line number where the batch ends in the original file */
+  EndLine: number;
+
+  /** Number of batches that succeeded before this one */
+  SucceededBatches: number;
+
+  /** The full SQL of the failed batch */
+  BatchSQL: string;
+
+  /** Lines from the batch that reference identifiers mentioned in the error */
+  ContextLines?: { LineNumber: number; Text: string }[];
+}
+
+/**
  * Thrown when a migration file fails to execute against SQL Server.
  * Contains details about which migration failed and the SQL error.
  */
@@ -32,21 +58,26 @@ export class MigrationExecutionError extends SkywayError {
   /** The migration script filename */
   readonly Script: string;
 
-  /** The specific SQL batch that failed, if identifiable */
+  /** The specific SQL batch that failed, if identifiable (first 500 chars) */
   readonly FailedSQL?: string;
+
+  /** Detailed information about the failed batch */
+  readonly BatchInfo?: FailedBatchInfo;
 
   constructor(
     version: string | null,
     script: string,
     message: string,
     failedSQL?: string,
-    cause?: Error
+    cause?: Error,
+    batchInfo?: FailedBatchInfo
   ) {
     super('MIGRATION_EXECUTION_FAILED', message, cause);
     this.name = 'MigrationExecutionError';
     this.Version = version;
     this.Script = script;
     this.FailedSQL = failedSQL;
+    this.BatchInfo = batchInfo;
   }
 }
 

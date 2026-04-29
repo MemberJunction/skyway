@@ -74,6 +74,13 @@ export interface SkywayConfig {
    * Defaults to false.
    */
   DryRun?: boolean;
+
+  /**
+   * When true, enables verbose output including per-batch progress logging
+   * and detailed SQL context on errors.
+   * Defaults to false.
+   */
+  Verbose?: boolean;
 }
 
 /**
@@ -141,6 +148,7 @@ export type ResolvedSkywayConfig = {
   Placeholders: Record<string, string>;
   TransactionMode: TransactionMode;
   DryRun: boolean;
+  Verbose: boolean;
 };
 
 /**
@@ -182,5 +190,6 @@ export function resolveConfig(config: SkywayConfig): ResolvedSkywayConfig {
     Placeholders: config.Placeholders ?? {},
     TransactionMode: config.TransactionMode ?? 'per-run',
     DryRun: config.DryRun ?? false,
+    Verbose: config.Verbose ?? false,
   };
 }

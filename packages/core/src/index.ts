@@ -95,6 +95,12 @@ export { ResolveMigrations, ResolverResult } from './migration/resolver';
 // ─── Executor Utilities ──────────────────────────────────────────────
 export { SplitOnGO, SQLBatch } from './executor/sql-splitter';
 export { SubstitutePlaceholders, PlaceholderContext } from './executor/placeholder';
+export {
+  ExtractErrorIdentifiers,
+  FindContextLines,
+  TruncateSQL,
+  ContextLine,
+} from './executor/error-context';
 
 // ─── History Types ───────────────────────────────────────────────────
 export { HistoryRecord, HistoryRecordType } from './history/types';
@@ -107,4 +113,5 @@ export {
   ChecksumMismatchError,
   TransactionError,
   ConnectionError,
+  FailedBatchInfo,
 } from './core/errors';
