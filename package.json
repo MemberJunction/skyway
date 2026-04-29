@@ -8,6 +8,8 @@
     "build": "npm run build -w packages/core && npm run build -w packages/sqlserver && npm run build -w packages/postgres && npm run build -w packages/cli",
     "clean": "npm run clean --workspaces",
     "test": "vitest run",
+    "test:integration:pg": "tsx integration-tests/postgres/run.ts",
+    "test:integration:mssql": "tsx integration-tests/sqlserver/run.ts",
     "change": "changeset",
     "version": "changeset version",
     "publish:packages": "changeset publish"
@@ -17,6 +19,7 @@
   },
   "devDependencies": {
     "@changesets/cli": "^2.27.12",
+    "tsx": "^4.19.2",
     "vitest": "^4.0.18"
   }
 }
