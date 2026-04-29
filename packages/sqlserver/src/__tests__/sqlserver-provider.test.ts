@@ -40,6 +40,12 @@ describe('SqlServerProvider', () => {
     it('defaults port to 1433', () => {
       expect(provider.DefaultPort).toBe(1433);
     });
+
+    it('exposes Config so Skyway can fall back to it when SkywayConfig.Database is omitted', () => {
+      expect(provider.Config).toBe(baseConfig);
+      expect(provider.Config.Database).toBe('TestDb');
+      expect(provider.Config.User).toBe('sa');
+    });
   });
 
   describe('connection state', () => {

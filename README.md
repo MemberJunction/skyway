@@ -49,12 +49,7 @@ const provider = new SqlServerProvider({
 });
 
 const skyway = new Skyway({
-    Database: {
-        Server: 'localhost',
-        Database: 'my_app',
-        User: 'sa',
-        Password: 'secret',
-    },
+    Provider: provider,
     Migrations: {
         Locations: ['./migrations'],
         DefaultSchema: 'dbo',
@@ -64,7 +59,8 @@ const skyway = new Skyway({
         'flyway:defaultSchema': 'dbo',
     },
     TransactionMode: 'per-run',
-    Provider: provider,
+    // Database is optional — Skyway falls back to provider.Config. Only
+    // pass it explicitly to override the provider's connection details.
 });
 
 // Apply pending migrations

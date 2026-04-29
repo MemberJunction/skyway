@@ -51,6 +51,10 @@ export class SqlServerProvider implements DatabaseProvider {
     return 1433;
   }
 
+  get Config(): DatabaseConfig {
+    return this.config;
+  }
+
   // ─── Connection Lifecycle ──────────────────────────────────────────
 
   async Connect(): Promise<void> {

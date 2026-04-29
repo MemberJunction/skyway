@@ -18,14 +18,14 @@ import {
  * Exported so CLI command modules can render consistent connection info
  * regardless of which dialect the user configured.
  */
-export function DefaultPortForDialect(dialect: SkywayConfig['Database']['Dialect']): number {
+export function DefaultPortForDialect(dialect: NonNullable<SkywayConfig['Database']>['Dialect']): number {
   return dialect === 'postgresql' ? 5432 : 1433;
 }
 
 /**
  * Dialect-aware default schema — 'dbo' for SQL Server, 'public' for PostgreSQL.
  */
-export function DefaultSchemaForDialect(dialect: SkywayConfig['Database']['Dialect']): string {
+export function DefaultSchemaForDialect(dialect: NonNullable<SkywayConfig['Database']>['Dialect']): string {
   return dialect === 'postgresql' ? 'public' : 'dbo';
 }
 
@@ -33,14 +33,23 @@ export function DefaultSchemaForDialect(dialect: SkywayConfig['Database']['Diale
  * Emits the standard connection-info block (dialect / database / schema) that
  * every command shares. Uses dialect-aware defaults so a PG run doesn't
  * falsely advertise port 1433 or schema `dbo`.
+ *
+ * Falls back to `Provider.Config` when `Database` isn't set explicitly —
+ * matches the same precedence rule `resolveConfig()` uses.
  */
 export function LogConnectionInfo(config: SkywayConfig): void {
-  const dialect = config.Database.Dialect ?? 'sqlserver';
-  const port = config.Database.Port ?? DefaultPortForDialect(dialect);
+  const database = config.Database ?? config.Provider?.Config;
+  if (!database) {
+    // Should never reach here — Skyway's own resolveConfig throws first.
+    LogInfo('Connection info unavailable: no Database or Provider in config.');
+    return;
+  }
+  const dialect = database.Dialect ?? config.Provider?.Dialect ?? 'sqlserver';
+  const port = database.Port ?? DefaultPortForDialect(dialect);
   const schema =
     config.Migrations.DefaultSchema ?? DefaultSchemaForDialect(dialect);
   LogInfo(`Dialect: ${dialect}`);
-  LogInfo(`Database: ${config.Database.Server}:${port}/${config.Database.Database}`);
+  LogInfo(`Database: ${database.Server}:${port}/${database.Database}`);
   LogInfo(`Schema: ${schema}`);
 }
 

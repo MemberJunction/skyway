@@ -25,18 +25,13 @@ const provider = new PostgresProvider({
 });
 
 const skyway = new Skyway({
-  Database: {
-    Server: 'localhost',
-    Database: 'my_app',
-    User: 'postgres',
-    Password: 'secret',
-  },
+  Provider: provider,
   Migrations: {
     Locations: ['./migrations'],
     DefaultSchema: 'public',
     BaselineOnMigrate: true,
   },
-  Provider: provider,
+  // Database is optional — falls back to provider.Config.
 });
 
 const result = await skyway.Migrate();

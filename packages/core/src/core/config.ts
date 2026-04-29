@@ -23,17 +23,23 @@ export type TransactionMode = 'per-run' | 'per-migration';
  * Complete configuration for a Skyway migration run.
  */
 export interface SkywayConfig {
-  /** Database connection settings */
-  Database: DatabaseConfig;
+  /**
+   * Database connection settings.
+   *
+   * Optional when `Provider` is supplied — Skyway will fall back to the
+   * provider's own `Config` (the `DatabaseConfig` it was constructed with)
+   * for the User, Database name, and similar fields it needs internally.
+   * Pass an explicit `Database` only when you want to override what the
+   * provider was configured with.
+   */
+  Database?: DatabaseConfig;
 
   /**
-   * An explicit database provider instance.
-   * When provided, Skyway uses this provider for all database operations
-   * instead of creating one from the Database config.
+   * The database provider that handles all DB-specific operations.
    *
-   * This allows consumers to supply custom providers or pre-configured
-   * provider instances from driver-specific packages like
-   * `@memberjunction/skyway-sqlserver` or `@memberjunction/skyway-postgres`.
+   * Construct one from a driver-specific package
+   * (`@memberjunction/skyway-sqlserver` or `@memberjunction/skyway-postgres`)
+   * and pass it here. Required.
    */
   Provider?: DatabaseProvider;
 
@@ -141,15 +147,29 @@ export type ResolvedSkywayConfig = {
  * Merges user-provided config with sensible defaults.
  * Default schema is dialect-aware: 'dbo' for SQL Server, 'public' for PostgreSQL.
  *
+ * When `Database` is omitted, it falls back to `Provider.Config` (the
+ * connection details the provider was constructed with). This lets callers
+ * pass connection details once via the provider rather than duplicating them.
+ *
  * @param config - Partial configuration provided by the user
  * @returns Complete configuration with all defaults applied
+ * @throws Error if neither `Database` nor `Provider` is supplied
  */
 export function resolveConfig(config: SkywayConfig): ResolvedSkywayConfig {
-  const dialect = config.Database.Dialect ?? 'sqlserver';
+  const database = config.Database ?? config.Provider?.Config;
+  if (!database) {
+    throw new Error(
+      'Skyway requires either Database connection config or a Provider ' +
+      '(from @memberjunction/skyway-sqlserver or @memberjunction/skyway-postgres). ' +
+      'Pass at least one in SkywayConfig.'
+    );
+  }
+
+  const dialect = database.Dialect ?? config.Provider?.Dialect ?? 'sqlserver';
   const defaultSchema = dialect === 'postgresql' ? 'public' : 'dbo';
 
   return {
-    Database: config.Database,
+    Database: database,
     Provider: config.Provider,
     Migrations: {
       Locations: config.Migrations.Locations,

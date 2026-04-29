@@ -52,6 +52,10 @@ export class PostgresProvider implements DatabaseProvider {
     return 5432;
   }
 
+  get Config(): DatabaseConfig {
+    return this.config;
+  }
+
   // ─── Connection Lifecycle ──────────────────────────────────────────
 
   async Connect(): Promise<void> {

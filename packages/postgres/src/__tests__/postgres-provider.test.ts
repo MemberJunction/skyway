@@ -41,6 +41,12 @@ describe('PostgresProvider', () => {
     it('defaults port to 5432', () => {
       expect(provider.DefaultPort).toBe(5432);
     });
+
+    it('exposes Config so Skyway can fall back to it when SkywayConfig.Database is omitted', () => {
+      expect(provider.Config).toBe(baseConfig);
+      expect(provider.Config.Database).toBe('test_db');
+      expect(provider.Config.User).toBe('postgres');
+    });
   });
 
   describe('connection state', () => {

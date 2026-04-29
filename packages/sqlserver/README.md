@@ -25,18 +25,13 @@ const provider = new SqlServerProvider({
 });
 
 const skyway = new Skyway({
-  Database: {
-    Server: 'localhost',
-    Database: 'my_app',
-    User: 'sa',
-    Password: 'secret',
-  },
+  Provider: provider,
   Migrations: {
     Locations: ['./migrations'],
     DefaultSchema: 'dbo',
     BaselineOnMigrate: true,
   },
-  Provider: provider,
+  // Database is optional — falls back to provider.Config.
 });
 
 const result = await skyway.Migrate();

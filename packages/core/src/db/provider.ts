@@ -15,6 +15,7 @@
 
 import { SQLBatch } from '../executor/sql-splitter';
 import { HistoryRecord } from '../history/types';
+import { DatabaseConfig } from './types';
 
 /**
  * Supported database dialects.
@@ -102,6 +103,16 @@ export interface DatabaseProvider {
 
   /** The default connection port for this dialect (1433 for SQL Server, 5432 for PG). */
   readonly DefaultPort: number;
+
+  /**
+   * The database connection config this provider was constructed with.
+   *
+   * Skyway uses this as a fallback when `SkywayConfig.Database` isn't passed —
+   * letting callers supply connection details once via the provider rather than
+   * duplicating them in `SkywayConfig.Database`. Read-only; mutating the
+   * returned object has no effect on the live provider.
+   */
+  readonly Config: DatabaseConfig;
 
   // ─── Script Splitting ──────────────────────────────────────────────
 

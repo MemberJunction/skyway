@@ -52,13 +52,17 @@ const provider = new PostgresProvider({
 });
 
 const skyway = new Skyway({
-  Database: { Server: 'localhost', Database: 'my_app', User: 'postgres', Password: 'secret' },
   Migrations: { Locations: ['./migrations'], DefaultSchema: 'public' },
   Provider: provider,
 });
 
 await skyway.Migrate();
 ```
+
+`SkywayConfig.Database` is now optional — when omitted, Skyway falls back to
+the `Provider.Config` the provider was constructed with. Pass `Database`
+explicitly only when you want to override what the provider was configured
+with (rare).
 
 ## Migration from 0.5.x
 
