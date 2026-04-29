@@ -15,7 +15,8 @@ export async function RunValidate(config: SkywayConfig): Promise<boolean> {
   const skyway = new Skyway(config);
 
   try {
-    LogInfo(`Validating migrations against ${config.Database.Database}...`);
+    const dbName = config.Database?.Database ?? config.Provider?.Config.Database ?? '(unknown)';
+    LogInfo(`Validating migrations against ${dbName}...`);
     console.log();
 
     const result = await skyway.Validate();

@@ -14,20 +14,6 @@
  */
 
 /**
- * Built-in placeholder names that Skyway recognizes in the `flyway:` namespace.
- * These are always available regardless of user configuration.
- */
-const BUILTIN_FLYWAY_PLACEHOLDERS = new Set([
-  'flyway:defaultSchema',
-  'flyway:database',
-  'flyway:user',
-  'flyway:timestamp',
-  'flyway:filename',
-  'flyway:workingDirectory',
-  'flyway:table',
-]);
-
-/**
  * Substitutes known placeholders in migration SQL content.
  *
  * Only replaces `${name}` patterns where `name` is either:

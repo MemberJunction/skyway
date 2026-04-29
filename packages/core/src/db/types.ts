@@ -3,25 +3,37 @@
  * Database connection configuration types for Skyway.
  */
 
+import { DatabaseDialect } from './provider';
+
 /**
- * Configuration for connecting to a SQL Server instance.
- * Maps directly to the `mssql` package connection options with
- * sensible defaults for migration workloads.
+ * Configuration for connecting to a database instance.
+ *
+ * Works with any supported dialect. The `Dialect` field determines
+ * which provider is used and which defaults apply (port, schema, etc.).
  */
 export interface DatabaseConfig {
-  /** SQL Server hostname or IP address */
+  /**
+   * The database dialect to use.
+   * Defaults to `'sqlserver'` for backward compatibility.
+   */
+  Dialect?: DatabaseDialect;
+
+  /** Database server hostname or IP address */
   Server: string;
 
-  /** SQL Server port. Defaults to 1433 */
+  /**
+   * Database server port.
+   * Defaults to 1433 for SQL Server, 5432 for PostgreSQL.
+   */
   Port?: number;
 
   /** Database name to connect to */
   Database: string;
 
-  /** SQL Server login username */
+  /** Login username */
   User: string;
 
-  /** SQL Server login password */
+  /** Login password */
   Password: string;
 
   /** Additional connection options */
@@ -29,17 +41,31 @@ export interface DatabaseConfig {
 }
 
 /**
- * Extended connection options for fine-tuning SQL Server connectivity.
+ * Extended connection options for fine-tuning database connectivity.
+ * Some options are dialect-specific — irrelevant options are ignored
+ * by providers that don't support them.
  */
 export interface DatabaseConnectionOptions {
-  /** Whether to encrypt the connection. Defaults to true */
+  // ─── SQL Server Options ──────────────────────────────────────────
+
+  /** Whether to encrypt the connection. Defaults to true (SQL Server) */
   Encrypt?: boolean;
 
-  /** Whether to trust self-signed certificates. Defaults to true */
+  /** Whether to trust self-signed certificates. Defaults to true (SQL Server) */
   TrustServerCertificate?: boolean;
 
-  /** Enable arithmetic abort. Defaults to true */
+  /** Enable arithmetic abort. Defaults to true (SQL Server) */
   EnableArithAbort?: boolean;
+
+  // ─── PostgreSQL Options ──────────────────────────────────────────
+
+  /**
+   * SSL configuration for PostgreSQL connections.
+   * Set to `true` for default SSL, or pass an object for custom SSL config.
+   */
+  SSL?: boolean | Record<string, unknown>;
+
+  // ─── Common Options ──────────────────────────────────────────────
 
   /** Request timeout in milliseconds. Defaults to 300000 (5 minutes) */
   RequestTimeout?: number;

@@ -4,6 +4,7 @@
  */
 
 import { DatabaseConfig } from '../db/types';
+import { DatabaseProvider } from '../db/provider';
 
 /**
  * Controls how transactions are applied during a migration run.
@@ -22,8 +23,25 @@ export type TransactionMode = 'per-run' | 'per-migration';
  * Complete configuration for a Skyway migration run.
  */
 export interface SkywayConfig {
-  /** SQL Server connection settings */
-  Database: DatabaseConfig;
+  /**
+   * Database connection settings.
+   *
+   * Optional when `Provider` is supplied — Skyway will fall back to the
+   * provider's own `Config` (the `DatabaseConfig` it was constructed with)
+   * for the User, Database name, and similar fields it needs internally.
+   * Pass an explicit `Database` only when you want to override what the
+   * provider was configured with.
+   */
+  Database?: DatabaseConfig;
+
+  /**
+   * The database provider that handles all DB-specific operations.
+   *
+   * Construct one from a driver-specific package
+   * (`@memberjunction/skyway-sqlserver` or `@memberjunction/skyway-postgres`)
+   * and pass it here. Required.
+   */
+  Provider?: DatabaseProvider;
 
   /** Migration file discovery and execution settings */
   Migrations: MigrationConfig;
@@ -119,16 +137,51 @@ export interface MigrationConfig {
 }
 
 /**
+ * Resolved configuration type with all defaults applied.
+ * Every optional field in `SkywayConfig` has been filled in with either
+ * the caller-provided value or the dialect-aware default.
+ */
+export type ResolvedSkywayConfig = {
+  Database: DatabaseConfig;
+  Provider: DatabaseProvider | undefined;
+  Migrations: Required<MigrationConfig>;
+  Placeholders: Record<string, string>;
+  TransactionMode: TransactionMode;
+  DryRun: boolean;
+  Verbose: boolean;
+};
+
+/**
  * Merges user-provided config with sensible defaults.
+ * Default schema is dialect-aware: 'dbo' for SQL Server, 'public' for PostgreSQL.
+ *
+ * When `Database` is omitted, it falls back to `Provider.Config` (the
+ * connection details the provider was constructed with). This lets callers
+ * pass connection details once via the provider rather than duplicating them.
+ *
  * @param config - Partial configuration provided by the user
  * @returns Complete configuration with all defaults applied
+ * @throws Error if neither `Database` nor `Provider` is supplied
  */
-export function resolveConfig(config: SkywayConfig): Required<SkywayConfig> & { Migrations: Required<MigrationConfig> } {
+export function resolveConfig(config: SkywayConfig): ResolvedSkywayConfig {
+  const database = config.Database ?? config.Provider?.Config;
+  if (!database) {
+    throw new Error(
+      'Skyway requires either Database connection config or a Provider ' +
+      '(from @memberjunction/skyway-sqlserver or @memberjunction/skyway-postgres). ' +
+      'Pass at least one in SkywayConfig.'
+    );
+  }
+
+  const dialect = database.Dialect ?? config.Provider?.Dialect ?? 'sqlserver';
+  const defaultSchema = dialect === 'postgresql' ? 'public' : 'dbo';
+
   return {
-    Database: config.Database,
+    Database: database,
+    Provider: config.Provider,
     Migrations: {
       Locations: config.Migrations.Locations,
-      DefaultSchema: config.Migrations.DefaultSchema ?? 'dbo',
+      DefaultSchema: config.Migrations.DefaultSchema ?? defaultSchema,
       HistoryTable: config.Migrations.HistoryTable ?? 'flyway_schema_history',
       BaselineVersion: config.Migrations.BaselineVersion ?? '1',
       BaselineOnMigrate: config.Migrations.BaselineOnMigrate ?? false,

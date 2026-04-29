@@ -1,33 +1,55 @@
 # Skyway
 
-A TypeScript-native database migration tool inspired by [Flyway](https://flywaydb.org/), built specifically for SQL Server.
+A TypeScript-native database migration tool inspired by [Flyway](https://flywaydb.org/), supporting **SQL Server and PostgreSQL** through a pluggable provider interface.
 
-Skyway eliminates the Java dependency required by Flyway while providing the same migration workflow — versioned migrations, baseline support, repeatable migrations, checksum validation, and schema history tracking. It targets SQL Server using the `mssql` (tedious) driver and wraps migrations in transactions for safe, atomic execution.
+Skyway eliminates the Java dependency required by Flyway while providing the same migration workflow — versioned migrations, baseline support, repeatable migrations, checksum validation, and schema history tracking. Migrations run inside transactions for safe, atomic execution on both dialects.
 
 ## Why Skyway?
 
-Flyway is the gold standard for database migrations, but it requires a Java runtime. For TypeScript/JavaScript projects targeting SQL Server, this means maintaining a Java toolchain alongside Node.js just for migrations. Skyway solves this by reimplementing Flyway's core migration engine natively in TypeScript:
+Flyway is the gold standard for database migrations, but it requires a Java runtime. For TypeScript/JavaScript projects, this means maintaining a Java toolchain alongside Node.js just for migrations. Skyway solves this by reimplementing Flyway's core migration engine natively in TypeScript:
 
 - **No Java required** — runs anywhere Node.js runs
 - **Flyway-compatible** — uses the same file naming conventions, history table schema, and checksum algorithm
-- **Transaction safety** — wraps migrations in SQL Server transactions (DDL is transactional in SQL Server)
+- **Multi-dialect** — SQL Server and PostgreSQL via dialect-specific provider packages; the engine itself is dialect-agnostic
+- **Transaction safety** — wraps migrations in database transactions (both dialects support transactional DDL)
 - **Dual interface** — use as a library in your application or as a standalone CLI tool
 - **Drop-in replacement** — point Skyway at your existing Flyway migration files and it just works
+
+## Packages
+
+| Package | Purpose |
+|---|---|
+| [`@memberjunction/skyway-core`](packages/core) | Migration engine, `Skyway` class, `DatabaseProvider` interface, utilities |
+| [`@memberjunction/skyway-sqlserver`](packages/sqlserver) | SQL Server provider (mssql/tedious driver) |
+| [`@memberjunction/skyway-postgres`](packages/postgres) | PostgreSQL provider (pg driver) |
+| [`@memberjunction/skyway-cli`](packages/cli) | Standalone CLI |
 
 ## Usage
 
 ### As a Library
 
+Install core + the dialect-specific provider:
+
+```bash
+npm install @memberjunction/skyway-core @memberjunction/skyway-sqlserver
+# or for PostgreSQL
+npm install @memberjunction/skyway-core @memberjunction/skyway-postgres
+```
+
 ```typescript
-import { Skyway } from '@skyway/core';
+import { Skyway } from '@memberjunction/skyway-core';
+import { SqlServerProvider } from '@memberjunction/skyway-sqlserver';
+// import { PostgresProvider } from '@memberjunction/skyway-postgres';
+
+const provider = new SqlServerProvider({
+    Server: 'localhost',
+    Database: 'my_app',
+    User: 'sa',
+    Password: 'secret',
+});
 
 const skyway = new Skyway({
-    Database: {
-        Server: 'localhost',
-        Database: 'my_app',
-        User: 'sa',
-        Password: 'secret',
-    },
+    Provider: provider,
     Migrations: {
         Locations: ['./migrations'],
         DefaultSchema: 'dbo',
@@ -37,6 +59,8 @@ const skyway = new Skyway({
         'flyway:defaultSchema': 'dbo',
     },
     TransactionMode: 'per-run',
+    // Database is optional — Skyway falls back to provider.Config. Only
+    // pass it explicitly to override the provider's connection details.
 });
 
 // Apply pending migrations

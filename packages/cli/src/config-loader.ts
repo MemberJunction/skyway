@@ -12,7 +12,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { SkywayConfig } from '@memberjunction/skyway-core';
+import { SkywayConfig, DatabaseDialect, DatabaseProvider } from '@memberjunction/skyway-core';
 
 /**
  * Configuration file names searched in order.
@@ -28,6 +28,9 @@ const CONFIG_FILE_NAMES = [
  * CLI options that can override config file settings.
  */
 export interface CLIOptions {
+  /** Database dialect: sqlserver or postgresql */
+  Dialect?: string;
+
   /** Database server hostname */
   Server?: string;
 
@@ -96,6 +99,15 @@ export function LoadConfig(cliOptions: CLIOptions, cwd: string = process.cwd()):
   // Load config file
   const fileConfig = loadConfigFile(cliOptions.Config, cwd);
 
+  // Resolve dialect first — it affects defaults for port and schema
+  const dialectStr = cliOptions.Dialect
+    ?? process.env.SKYWAY_DIALECT
+    ?? fileConfig?.Database?.Dialect
+    ?? 'sqlserver';
+  const dialect: DatabaseDialect = dialectStr === 'postgresql' ? 'postgresql' : 'sqlserver';
+  const defaultPort = dialect === 'postgresql' ? 5432 : 1433;
+  const defaultSchema = dialect === 'postgresql' ? 'public' : 'dbo';
+
   // Merge: CLI > env > file > defaults
   const server = cliOptions.Server
     ?? process.env.SKYWAY_SERVER ?? process.env.DB_HOST
@@ -106,7 +118,7 @@ export function LoadConfig(cliOptions: CLIOptions, cwd: string = process.cwd()):
     ?? (process.env.SKYWAY_PORT ? parseInt(process.env.SKYWAY_PORT) : undefined)
     ?? (process.env.DB_PORT ? parseInt(process.env.DB_PORT) : undefined)
     ?? fileConfig?.Database?.Port
-    ?? 1433;
+    ?? defaultPort;
 
   const database = cliOptions.Database
     ?? process.env.SKYWAY_DATABASE ?? process.env.DB_DATABASE
@@ -137,7 +149,7 @@ export function LoadConfig(cliOptions: CLIOptions, cwd: string = process.cwd()):
   const schema = cliOptions.Schema
     ?? process.env.SKYWAY_SCHEMA
     ?? fileConfig?.Migrations?.DefaultSchema
-    ?? 'dbo';
+    ?? defaultSchema;
 
   // Parse placeholders from CLI (key=value pairs)
   const placeholders: Record<string, string> = { ...fileConfig?.Placeholders };
@@ -150,21 +162,29 @@ export function LoadConfig(cliOptions: CLIOptions, cwd: string = process.cwd()):
     }
   }
 
-  return {
-    Database: {
-      Server: server,
-      Port: port,
-      Database: database,
-      User: user,
-      Password: password,
-      Options: {
-        TrustServerCertificate: cliOptions.TrustServerCertificate
-          ?? fileConfig?.Database?.Options?.TrustServerCertificate
-          ?? true,
-        Encrypt: fileConfig?.Database?.Options?.Encrypt ?? false,
-        RequestTimeout: fileConfig?.Database?.Options?.RequestTimeout ?? 300_000,
-      },
+  const dbConfig = {
+    Dialect: dialect,
+    Server: server,
+    Port: port,
+    Database: database,
+    User: user,
+    Password: password,
+    Options: {
+      TrustServerCertificate: cliOptions.TrustServerCertificate
+        ?? fileConfig?.Database?.Options?.TrustServerCertificate
+        ?? true,
+      Encrypt: fileConfig?.Database?.Options?.Encrypt ?? false,
+      RequestTimeout: fileConfig?.Database?.Options?.RequestTimeout ?? 300_000,
+      SSL: fileConfig?.Database?.Options?.SSL,
     },
+  };
+
+  // Create the appropriate database provider based on dialect
+  const provider = createProvider(dialect, dbConfig);
+
+  return {
+    Database: dbConfig,
+    Provider: provider,
     Migrations: {
       Locations: locations,
       DefaultSchema: schema,
@@ -186,6 +206,19 @@ export function LoadConfig(cliOptions: CLIOptions, cwd: string = process.cwd()):
     DryRun: cliOptions.DryRun ?? fileConfig?.DryRun ?? false,
     Verbose: cliOptions.Verbose ?? fileConfig?.Verbose ?? false,
   };
+}
+
+/**
+ * Creates the appropriate database provider based on the dialect.
+ */
+function createProvider(dialect: DatabaseDialect, dbConfig: SkywayConfig['Database']): DatabaseProvider {
+  if (dialect === 'postgresql') {
+    const { PostgresProvider } = require('@memberjunction/skyway-postgres');
+    return new PostgresProvider(dbConfig);
+  } else {
+    const { SqlServerProvider } = require('@memberjunction/skyway-sqlserver');
+    return new SqlServerProvider(dbConfig);
+  }
 }
 
 /**
@@ -234,6 +267,7 @@ function loadFile(filePath: string): Partial<SkywayConfig> {
  * Supports both casings in JSON config files.
  */
 const KEY_MAP: Record<string, string> = {
+  dialect: 'Dialect',
   database: 'Database',
   server: 'Server',
   port: 'Port',

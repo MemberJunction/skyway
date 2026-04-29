@@ -8,12 +8,18 @@
  * @example
  * ```typescript
  * import { Skyway } from '@memberjunction/skyway-core';
+ * import { SqlServerProvider } from '@memberjunction/skyway-sqlserver';
+ *
+ * const provider = new SqlServerProvider({
+ *   Server: 'localhost', Database: 'mydb', User: 'sa', Password: 'secret'
+ * });
  *
  * const skyway = new Skyway({
  *   Database: { Server: 'localhost', Database: 'mydb', User: 'sa', Password: 'secret' },
  *   Migrations: { Locations: ['./migrations'], DefaultSchema: '__mj' },
  *   Placeholders: { 'flyway:defaultSchema': '__mj' },
  *   TransactionMode: 'per-run',
+ *   Provider: provider,
  * });
  *
  * const result = await skyway.Migrate();
@@ -23,16 +29,13 @@
  * ```
  */
 
-import * as sql from 'mssql';
-import { SkywayConfig, MigrationConfig, resolveConfig, TransactionMode } from './config';
-import { ConnectionManager } from '../db/connection';
-import { HistoryTable } from '../history/history-table';
+import { SkywayConfig, ResolvedSkywayConfig, resolveConfig } from './config';
+import { DatabaseProvider, ProviderTransaction, HistoryInsertParams } from '../db/provider';
 import { HistoryRecord } from '../history/types';
 import { ScanAndResolveMigrations } from '../migration/scanner';
 import { ResolveMigrations, ResolverResult } from '../migration/resolver';
 import { ResolvedMigration, MigrationStatus } from '../migration/types';
-import { ExecuteMigrations, MigrationExecutionResult, ExecutionCallbacks } from '../executor/executor';
-import { PlaceholderContext } from '../executor/placeholder';
+import { SubstitutePlaceholders, PlaceholderContext } from '../executor/placeholder';
 
 /**
  * Result of a `Migrate()` operation.
@@ -55,6 +58,23 @@ export interface MigrateResult {
 
   /** Error message if the run failed */
   ErrorMessage?: string;
+}
+
+/**
+ * Result of executing a single migration file.
+ */
+export interface MigrationExecutionResult {
+  /** The migration that was executed */
+  Migration: ResolvedMigration;
+
+  /** Whether execution completed successfully */
+  Success: boolean;
+
+  /** Execution time in milliseconds */
+  ExecutionTimeMS: number;
+
+  /** Error details if execution failed */
+  Error?: Error;
 }
 
 /**
@@ -147,29 +167,37 @@ export interface SkywayCallbacks {
  * - `CreateDatabase()` / `DropDatabase()` — Database lifecycle management
  */
 export class Skyway {
-  private readonly config: ReturnType<typeof resolveConfig>;
-  private readonly connectionManager: ConnectionManager;
-  private historyTable: HistoryTable | null = null;
+  private readonly config: ResolvedSkywayConfig;
+  private readonly provider: DatabaseProvider;
   private callbacks: SkywayCallbacks = {};
 
+  /**
+   * Creates a new Skyway instance.
+   *
+   * A `DatabaseProvider` must be supplied either via `config.Provider`
+   * or Skyway will throw an error. The provider determines which database
+   * platform is targeted (SQL Server, PostgreSQL, etc.).
+   *
+   * @param config - Migration configuration including database connection and provider
+   * @throws Error if no DatabaseProvider is supplied
+   */
   constructor(config: SkywayConfig) {
     this.config = resolveConfig(config);
-    this.connectionManager = new ConnectionManager(this.config.Database);
+
+    if (!this.config.Provider) {
+      throw new Error(
+        'No DatabaseProvider supplied. Pass a provider via config.Provider. ' +
+        'Install @memberjunction/skyway-sqlserver or @memberjunction/skyway-postgres ' +
+        'and create the appropriate provider instance.'
+      );
+    }
+
+    this.provider = this.config.Provider;
   }
 
   /**
    * Registers callbacks for observing migration progress.
    * Returns `this` for chaining.
-   *
-   * @example
-   * ```typescript
-   * skyway
-   *   .OnProgress({
-   *     OnLog: (msg) => console.log(msg),
-   *     OnMigrationEnd: (r) => console.log(`${r.Migration.Version}: ${r.Success ? 'OK' : 'FAIL'}`),
-   *   })
-   *   .Migrate();
-   * ```
    */
   OnProgress(callbacks: SkywayCallbacks): this {
     this.callbacks = callbacks;
@@ -193,24 +221,19 @@ export class Skyway {
     const startTime = Date.now();
 
     try {
-      // Connect and set up
-      await this.connectionManager.Connect();
-      const pool = this.connectionManager.GetPool();
+      await this.provider.Connect();
 
-      this.historyTable = new HistoryTable(
-        pool,
-        this.config.Migrations.DefaultSchema,
-        this.config.Migrations.HistoryTable
-      );
+      const schema = this.config.Migrations.DefaultSchema;
+      const historyTable = this.config.Migrations.HistoryTable;
 
-      // Ensure schema and history table exist (outside any migration transaction)
-      await this.historyTable.EnsureExists();
+      // Ensure schema and history table exist
+      await this.provider.History.EnsureExists(schema, historyTable);
 
       // Insert schema creation marker if this is a fresh table
-      const existingRecords = await this.historyTable.GetAllRecords();
+      const existingRecords = await this.provider.History.GetAllRecords(schema, historyTable);
       if (existingRecords.length === 0) {
-        await this.historyTable.InsertSchemaMarker(this.config.Database.User);
-        this.callbacks.OnLog?.(`Created schema [${this.config.Migrations.DefaultSchema}]`);
+        await this.insertSchemaMarker(schema, historyTable);
+        this.callbacks.OnLog?.(`Created schema [${schema}]`);
       }
 
       // Scan and resolve migrations
@@ -222,7 +245,7 @@ export class Skyway {
       this.callbacks.OnLog?.(`Found ${discovered.length} migration file(s)`);
 
       // Re-read history (may have changed after schema creation)
-      const currentHistory = await this.historyTable.GetAllRecords();
+      const currentHistory = await this.provider.History.GetAllRecords(schema, historyTable);
 
       const resolution = ResolveMigrations(
         discovered,
@@ -277,7 +300,7 @@ export class Skyway {
         `${resolution.PendingMigrations.length} migration(s) pending`
       );
 
-      // Dry-run mode: log what would be applied and return early
+      // Dry-run mode
       if (this.config.DryRun) {
         this.callbacks.OnLog?.('DRY RUN — no migrations will be applied');
         for (const m of resolution.PendingMigrations) {
@@ -295,11 +318,7 @@ export class Skyway {
       }
 
       // Execute migrations
-      const result = await this.executeMigrationsWithHistory(
-        pool,
-        resolution,
-        currentHistory
-      );
+      const result = await this.executeMigrationsWithHistory(resolution);
 
       return {
         MigrationsApplied: result.filter((r) => r.Success).length,
@@ -325,22 +344,18 @@ export class Skyway {
    * Returns migration status information for all discovered and applied migrations.
    */
   async Info(): Promise<MigrationStatus[]> {
-    await this.connectionManager.Connect();
-    const pool = this.connectionManager.GetPool();
+    await this.provider.Connect();
 
-    this.historyTable = new HistoryTable(
-      pool,
-      this.config.Migrations.DefaultSchema,
-      this.config.Migrations.HistoryTable
-    );
+    const schema = this.config.Migrations.DefaultSchema;
+    const historyTable = this.config.Migrations.HistoryTable;
 
     const discovered = await ScanAndResolveMigrations(
       this.config.Migrations.Locations
     );
 
     let applied: HistoryRecord[] = [];
-    if (await this.historyTable.Exists()) {
-      applied = await this.historyTable.GetAllRecords();
+    if (await this.provider.History.Exists(schema, historyTable)) {
+      applied = await this.provider.History.GetAllRecords(schema, historyTable);
     }
 
     const resolution = ResolveMigrations(
@@ -359,22 +374,17 @@ export class Skyway {
    * Checks checksums for all applied versioned migrations.
    */
   async Validate(): Promise<ValidateResult> {
-    await this.connectionManager.Connect();
-    const pool = this.connectionManager.GetPool();
+    await this.provider.Connect();
 
-    this.historyTable = new HistoryTable(
-      pool,
-      this.config.Migrations.DefaultSchema,
-      this.config.Migrations.HistoryTable
-    );
-
+    const schema = this.config.Migrations.DefaultSchema;
+    const historyTable = this.config.Migrations.HistoryTable;
     const errors: string[] = [];
 
-    if (!(await this.historyTable.Exists())) {
+    if (!(await this.provider.History.Exists(schema, historyTable))) {
       return { Valid: true, Errors: [] };
     }
 
-    const applied = await this.historyTable.GetAllRecords();
+    const applied = await this.provider.History.GetAllRecords(schema, historyTable);
     const discovered = await ScanAndResolveMigrations(
       this.config.Migrations.Locations
     );
@@ -436,69 +446,38 @@ export class Skyway {
 
   /**
    * Creates the target database if it doesn't already exist.
-   * Connects to the `master` database to execute CREATE DATABASE.
    */
   async CreateDatabase(): Promise<void> {
     const dbName = this.config.Database.Database;
-    const masterPool = await this.connectionManager.ConnectToMaster();
-
-    try {
-      const request = new sql.Request(masterPool);
-      const result = await request.query(
-        `SELECT DB_ID('${dbName}') AS dbid`
-      );
-
-      if (result.recordset[0].dbid === null) {
-        this.callbacks.OnLog?.(`Creating database [${dbName}]...`);
-        const createRequest = new sql.Request(masterPool);
-        await createRequest.batch(`CREATE DATABASE [${dbName}]`);
-        this.callbacks.OnLog?.(`Database [${dbName}] created`);
-      } else {
-        this.callbacks.OnLog?.(`Database [${dbName}] already exists`);
-      }
-    } finally {
-      await masterPool.close();
+    const exists = await this.provider.DatabaseExists(dbName);
+    if (!exists) {
+      this.callbacks.OnLog?.(`Creating database [${dbName}]...`);
+      await this.provider.CreateDatabase(dbName);
+      this.callbacks.OnLog?.(`Database [${dbName}] created`);
+    } else {
+      this.callbacks.OnLog?.(`Database [${dbName}] already exists`);
     }
   }
 
   /**
    * Drops the target database if it exists.
-   * Connects to the `master` database to execute DROP DATABASE.
    *
    * **WARNING**: This is destructive and irreversible!
    */
   async DropDatabase(): Promise<void> {
     const dbName = this.config.Database.Database;
-    const masterPool = await this.connectionManager.ConnectToMaster();
-
-    try {
-      const request = new sql.Request(masterPool);
-      const result = await request.query(
-        `SELECT DB_ID('${dbName}') AS dbid`
-      );
-
-      if (result.recordset[0].dbid !== null) {
-        this.callbacks.OnLog?.(`Dropping database [${dbName}]...`);
-        const dropRequest = new sql.Request(masterPool);
-        await dropRequest.batch(`
-          ALTER DATABASE [${dbName}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
-          DROP DATABASE [${dbName}];
-        `);
-        this.callbacks.OnLog?.(`Database [${dbName}] dropped`);
-      } else {
-        this.callbacks.OnLog?.(`Database [${dbName}] does not exist`);
-      }
-    } finally {
-      await masterPool.close();
+    const exists = await this.provider.DatabaseExists(dbName);
+    if (exists) {
+      this.callbacks.OnLog?.(`Dropping database [${dbName}]...`);
+      await this.provider.DropDatabase(dbName);
+      this.callbacks.OnLog?.(`Database [${dbName}] dropped`);
+    } else {
+      this.callbacks.OnLog?.(`Database [${dbName}] does not exist`);
     }
   }
 
   /**
    * Drops all objects in the configured schema.
-   *
-   * Drop order: FK constraints → views → stored procedures →
-   * functions → user-defined types → tables → schema.
-   * The `dbo` schema is never dropped (it is a SQL Server built-in).
    *
    * **WARNING**: This is destructive and irreversible!
    */
@@ -506,91 +485,25 @@ export class Skyway {
     const droppedObjects: string[] = [];
 
     try {
-      await this.connectionManager.Connect();
-      const pool = this.connectionManager.GetPool();
+      await this.provider.Connect();
       const schema = this.config.Migrations.DefaultSchema;
 
       this.callbacks.OnLog?.(`Cleaning schema [${schema}]...`);
 
-      // 1. Drop foreign key constraints
-      const fkResult = await pool.request().query(`
-        SELECT fk.name AS FKName, OBJECT_NAME(fk.parent_object_id) AS TableName
-        FROM sys.foreign_keys fk
-        JOIN sys.tables t ON fk.parent_object_id = t.object_id
-        WHERE SCHEMA_NAME(t.schema_id) = '${schema}'
-      `);
-      for (const row of fkResult.recordset) {
-        await pool.request().batch(`ALTER TABLE [${schema}].[${row.TableName}] DROP CONSTRAINT [${row.FKName}]`);
-        const label = `FK constraint [${row.FKName}] on [${schema}].[${row.TableName}]`;
-        droppedObjects.push(label);
-        this.callbacks.OnLog?.(`  Dropped ${label}`);
+      // Get ordered list of drop operations from provider
+      const operations = await this.provider.GetCleanOperations(schema);
+
+      // Execute each drop operation
+      for (const op of operations) {
+        await this.provider.Execute(op.SQL);
+        droppedObjects.push(op.Label);
+        this.callbacks.OnLog?.(`  Dropped ${op.Label}`);
       }
 
-      // 2. Drop views
-      const viewResult = await pool.request().query(`
-        SELECT name FROM sys.views WHERE schema_id = SCHEMA_ID('${schema}')
-      `);
-      for (const row of viewResult.recordset) {
-        await pool.request().batch(`DROP VIEW [${schema}].[${row.name}]`);
-        droppedObjects.push(`View [${schema}].[${row.name}]`);
-        this.callbacks.OnLog?.(`  Dropped view [${schema}].[${row.name}]`);
-      }
-
-      // 3. Drop stored procedures
-      const spResult = await pool.request().query(`
-        SELECT name FROM sys.procedures WHERE schema_id = SCHEMA_ID('${schema}')
-      `);
-      for (const row of spResult.recordset) {
-        await pool.request().batch(`DROP PROCEDURE [${schema}].[${row.name}]`);
-        droppedObjects.push(`Procedure [${schema}].[${row.name}]`);
-        this.callbacks.OnLog?.(`  Dropped procedure [${schema}].[${row.name}]`);
-      }
-
-      // 4. Drop functions
-      const fnResult = await pool.request().query(`
-        SELECT name FROM sys.objects
-        WHERE schema_id = SCHEMA_ID('${schema}')
-          AND type IN ('FN', 'IF', 'TF')
-      `);
-      for (const row of fnResult.recordset) {
-        await pool.request().batch(`DROP FUNCTION [${schema}].[${row.name}]`);
-        droppedObjects.push(`Function [${schema}].[${row.name}]`);
-        this.callbacks.OnLog?.(`  Dropped function [${schema}].[${row.name}]`);
-      }
-
-      // 5. Drop user-defined types
-      const typeResult = await pool.request().query(`
-        SELECT name FROM sys.types
-        WHERE schema_id = SCHEMA_ID('${schema}') AND is_user_defined = 1
-      `);
-      for (const row of typeResult.recordset) {
-        await pool.request().batch(`DROP TYPE [${schema}].[${row.name}]`);
-        droppedObjects.push(`Type [${schema}].[${row.name}]`);
-        this.callbacks.OnLog?.(`  Dropped type [${schema}].[${row.name}]`);
-      }
-
-      // 6. Drop tables
-      const tableResult = await pool.request().query(`
-        SELECT name FROM sys.tables WHERE schema_id = SCHEMA_ID('${schema}')
-      `);
-      for (const row of tableResult.recordset) {
-        await pool.request().batch(`DROP TABLE [${schema}].[${row.name}]`);
-        droppedObjects.push(`Table [${schema}].[${row.name}]`);
-        this.callbacks.OnLog?.(`  Dropped table [${schema}].[${row.name}]`);
-      }
-
-      // 7. Drop schema (unless it's dbo)
-      if (schema.toLowerCase() !== 'dbo') {
-        const schemaExists = await pool.request().query(
-          `SELECT COUNT(*) AS cnt FROM sys.schemas WHERE name = '${schema}'`
-        );
-        if (schemaExists.recordset[0].cnt > 0) {
-          await pool.request().batch(`DROP SCHEMA [${schema}]`);
-          droppedObjects.push(`Schema [${schema}]`);
-          this.callbacks.OnLog?.(`  Dropped schema [${schema}]`);
-        }
-      }
-
+      // Drop the schema itself
+      await this.provider.DropSchema(schema);
+      // Check if schema was actually dropped (provider skips built-in schemas)
+      // We log it if it was in the operations list
       this.callbacks.OnLog?.(`Clean completed: ${droppedObjects.length} object(s) dropped`);
 
       return {
@@ -610,33 +523,20 @@ export class Skyway {
 
   /**
    * Baselines the database at a specified version.
-   *
-   * Creates the history table and inserts a baseline marker. This is used
-   * to tell Skyway to skip all migrations up to and including the baseline
-   * version, treating the database as already at that point.
-   *
-   * Fails if the history table already contains migration records (not
-   * counting the SCHEMA marker).
-   *
-   * @param version - Version to baseline at (defaults to config BaselineVersion)
    */
   async Baseline(version?: string): Promise<BaselineResult> {
     const baselineVersion = version ?? this.config.Migrations.BaselineVersion;
 
     try {
-      await this.connectionManager.Connect();
-      const pool = this.connectionManager.GetPool();
+      await this.provider.Connect();
 
-      this.historyTable = new HistoryTable(
-        pool,
-        this.config.Migrations.DefaultSchema,
-        this.config.Migrations.HistoryTable
-      );
+      const schema = this.config.Migrations.DefaultSchema;
+      const historyTable = this.config.Migrations.HistoryTable;
 
-      await this.historyTable.EnsureExists();
+      await this.provider.History.EnsureExists(schema, historyTable);
 
       // Check for existing migration records
-      const records = await this.historyTable.GetAllRecords();
+      const records = await this.provider.History.GetAllRecords(schema, historyTable);
       const migrationRecords = records.filter(r => r.Type !== 'SCHEMA');
       if (migrationRecords.length > 0) {
         return {
@@ -650,17 +550,25 @@ export class Skyway {
 
       // Insert schema marker if not present
       if (records.length === 0) {
-        await this.historyTable.InsertSchemaMarker(this.config.Database.User);
+        await this.insertSchemaMarker(schema, historyTable);
       }
 
       // Insert baseline record
-      await this.historyTable.InsertBaseline(
-        baselineVersion,
-        this.config.Database.User
-      );
+      const nextRank = await this.provider.History.GetNextRank(schema, historyTable);
+      await this.provider.History.InsertRecord(schema, historyTable, {
+        InstalledRank: nextRank,
+        Version: baselineVersion,
+        Description: '<< Flyway Baseline >>',
+        Type: 'BASELINE',
+        Script: '<< Flyway Baseline >>',
+        Checksum: null,
+        InstalledBy: this.config.Database.User,
+        ExecutionTime: 0,
+        Success: true,
+      });
 
       this.callbacks.OnLog?.(
-        `Successfully baselined schema [${this.config.Migrations.DefaultSchema}] at version ${baselineVersion}`
+        `Successfully baselined schema [${schema}] at version ${baselineVersion}`
       );
 
       return {
@@ -678,25 +586,18 @@ export class Skyway {
 
   /**
    * Repairs the schema history table.
-   *
-   * Performs two operations:
-   * 1. Removes all failed migration entries
-   * 2. Realigns checksums of applied migrations with current files on disk
+   * Removes failed entries and realigns checksums.
    */
   async Repair(): Promise<RepairResult> {
     const repairDetails: string[] = [];
 
     try {
-      await this.connectionManager.Connect();
-      const pool = this.connectionManager.GetPool();
+      await this.provider.Connect();
 
-      this.historyTable = new HistoryTable(
-        pool,
-        this.config.Migrations.DefaultSchema,
-        this.config.Migrations.HistoryTable
-      );
+      const schema = this.config.Migrations.DefaultSchema;
+      const historyTable = this.config.Migrations.HistoryTable;
 
-      if (!(await this.historyTable.Exists())) {
+      if (!(await this.provider.History.Exists(schema, historyTable))) {
         return {
           Success: true,
           FailedEntriesRemoved: 0,
@@ -705,13 +606,13 @@ export class Skyway {
         };
       }
 
-      const records = await this.historyTable.GetAllRecords();
+      const records = await this.provider.History.GetAllRecords(schema, historyTable);
 
       // 1. Remove failed entries
       let failedRemoved = 0;
       for (const record of records) {
         if (!record.Success) {
-          await this.historyTable.DeleteRecord(record.InstalledRank);
+          await this.provider.History.DeleteRecord(schema, historyTable, record.InstalledRank);
           const detail = `Removed failed entry: version=${record.Version}, description=${record.Description}`;
           repairDetails.push(detail);
           this.callbacks.OnLog?.(detail);
@@ -737,7 +638,7 @@ export class Skyway {
         }
         const diskMigration = diskByVersion.get(record.Version);
         if (diskMigration && record.Checksum !== null && record.Checksum !== diskMigration.Checksum) {
-          await this.historyTable.UpdateChecksum(record.InstalledRank, diskMigration.Checksum);
+          await this.provider.History.UpdateChecksum(schema, historyTable, record.InstalledRank, diskMigration.Checksum);
           const detail = `Realigned checksum for version ${record.Version}: ${record.Checksum} → ${diskMigration.Checksum}`;
           repairDetails.push(detail);
           this.callbacks.OnLog?.(detail);
@@ -768,71 +669,80 @@ export class Skyway {
   }
 
   /**
-   * Closes the database connection pool.
+   * Closes the database connection.
    * Should be called when done with the Skyway instance.
    */
   async Close(): Promise<void> {
-    await this.connectionManager.Disconnect();
+    await this.provider.Disconnect();
   }
 
   // ─── Private Methods ──────────────────────────────────────────────
 
   /**
+   * Inserts the schema creation marker (installed_rank 0).
+   */
+  private async insertSchemaMarker(schema: string, historyTable: string): Promise<void> {
+    // Check if rank 0 already exists (idempotent)
+    const records = await this.provider.History.GetAllRecords(schema, historyTable);
+    if (records.some(r => r.InstalledRank === 0)) {
+      return;
+    }
+
+    await this.provider.History.InsertRecord(schema, historyTable, {
+      InstalledRank: 0,
+      Version: null,
+      Description: '<< Flyway Schema Creation >>',
+      Type: 'SCHEMA',
+      Script: `[${schema}]`,
+      Checksum: null,
+      InstalledBy: this.config.Database.User,
+      ExecutionTime: 0,
+      Success: true,
+    });
+  }
+
+  /**
    * Executes pending migrations and records results in the history table.
-   * Handles both per-run and per-migration transaction modes.
    */
   private async executeMigrationsWithHistory(
-    pool: sql.ConnectionPool,
-    resolution: ResolverResult,
-    existingHistory: HistoryRecord[]
+    resolution: ResolverResult
   ): Promise<MigrationExecutionResult[]> {
     const migrations = resolution.PendingMigrations;
-    const placeholderContext = this.buildPlaceholderContext();
-    const transactionMode = this.config.TransactionMode;
 
-    if (transactionMode === 'per-run') {
-      return this.executePerRunWithHistory(pool, migrations, placeholderContext);
+    if (this.config.TransactionMode === 'per-run') {
+      return this.executePerRunWithHistory(migrations);
     } else {
-      return this.executePerMigrationWithHistory(pool, migrations, placeholderContext);
+      return this.executePerMigrationWithHistory(migrations);
     }
   }
 
   /**
    * Per-run transaction mode: wrap everything in one transaction.
-   * History records are inserted within the same transaction so they
-   * roll back together with the migration SQL on failure.
    */
   private async executePerRunWithHistory(
-    pool: sql.ConnectionPool,
-    migrations: ResolvedMigration[],
-    placeholderContext: PlaceholderContext
+    migrations: ResolvedMigration[]
   ): Promise<MigrationExecutionResult[]> {
     const results: MigrationExecutionResult[] = [];
-    const transaction = new sql.Transaction(pool);
+    const schema = this.config.Migrations.DefaultSchema;
+    const historyTable = this.config.Migrations.HistoryTable;
+    const txn = await this.provider.BeginTransaction();
 
     try {
-      await transaction.begin();
       this.callbacks.OnLog?.('Transaction started (per-run mode — all or nothing)');
 
-      let nextRank = await this.historyTable!.GetNextRank(transaction);
+      let nextRank = await this.provider.History.GetNextRank(schema, historyTable, txn);
 
       for (const migration of migrations) {
         this.callbacks.OnMigrationStart?.(migration);
-        const result = await this.executeSingleWithinTransaction(
-          transaction,
-          migration,
-          placeholderContext
-        );
+        const result = await this.executeSingleMigration(txn, migration);
         results.push(result);
 
         if (result.Success) {
-          // Record in history within the same transaction
-          await this.historyTable!.InsertAppliedMigration(
-            migration,
-            nextRank++,
-            result.ExecutionTimeMS,
-            this.config.Database.User,
-            transaction
+          await this.provider.History.InsertRecord(
+            schema,
+            historyTable,
+            this.buildHistoryRecord(migration, nextRank++, result.ExecutionTimeMS),
+            txn
           );
 
           this.callbacks.OnLog?.(
@@ -840,14 +750,13 @@ export class Skyway {
           );
           this.callbacks.OnMigrationEnd?.(result);
         } else {
-          // Failure — roll back everything
           this.callbacks.OnLog?.(
             `Migration FAILED: ${migration.Version ?? migration.Description} — ${result.Error?.message}`
           );
           this.callbacks.OnMigrationEnd?.(result);
 
           try {
-            await transaction.rollback();
+            await txn.Rollback();
             this.callbacks.OnLog?.('Transaction rolled back — no migrations were applied');
           } catch (rollbackErr) {
             this.callbacks.OnLog?.(`Warning: rollback error: ${rollbackErr}`);
@@ -857,14 +766,14 @@ export class Skyway {
       }
 
       // All succeeded — commit
-      await transaction.commit();
+      await txn.Commit();
       this.callbacks.OnLog?.('Transaction committed — all migrations applied successfully');
       return results;
     } catch (err) {
       try {
-        await transaction.rollback();
+        await txn.Rollback();
       } catch {
-        // Swallow
+        // Swallow rollback error — the original error is more important
       }
       throw err;
     }
@@ -874,36 +783,29 @@ export class Skyway {
    * Per-migration transaction mode: each migration gets its own transaction.
    */
   private async executePerMigrationWithHistory(
-    pool: sql.ConnectionPool,
-    migrations: ResolvedMigration[],
-    placeholderContext: PlaceholderContext
+    migrations: ResolvedMigration[]
   ): Promise<MigrationExecutionResult[]> {
     const results: MigrationExecutionResult[] = [];
+    const schema = this.config.Migrations.DefaultSchema;
+    const historyTable = this.config.Migrations.HistoryTable;
 
     for (const migration of migrations) {
-      const transaction = new sql.Transaction(pool);
+      const txn = await this.provider.BeginTransaction();
 
       try {
-        await transaction.begin();
         this.callbacks.OnMigrationStart?.(migration);
-
-        const result = await this.executeSingleWithinTransaction(
-          transaction,
-          migration,
-          placeholderContext
-        );
+        const result = await this.executeSingleMigration(txn, migration);
         results.push(result);
 
         if (result.Success) {
-          const nextRank = await this.historyTable!.GetNextRank(transaction);
-          await this.historyTable!.InsertAppliedMigration(
-            migration,
-            nextRank,
-            result.ExecutionTimeMS,
-            this.config.Database.User,
-            transaction
+          const nextRank = await this.provider.History.GetNextRank(schema, historyTable, txn);
+          await this.provider.History.InsertRecord(
+            schema,
+            historyTable,
+            this.buildHistoryRecord(migration, nextRank, result.ExecutionTimeMS),
+            txn
           );
-          await transaction.commit();
+          await txn.Commit();
 
           this.callbacks.OnLog?.(
             `Migrated to version ${migration.Version ?? '(repeatable)'}: ${migration.Description} (${result.ExecutionTimeMS}ms)`
@@ -911,7 +813,7 @@ export class Skyway {
           this.callbacks.OnMigrationEnd?.(result);
         } else {
           this.callbacks.OnMigrationEnd?.(result);
-          await transaction.rollback();
+          await txn.Rollback();
           this.callbacks.OnLog?.(
             `Migration rolled back: ${migration.Version ?? migration.Description}`
           );
@@ -919,7 +821,7 @@ export class Skyway {
         }
       } catch (err) {
         try {
-          await transaction.rollback();
+          await txn.Rollback();
         } catch {
           // Swallow
         }
@@ -932,15 +834,11 @@ export class Skyway {
 
   /**
    * Executes a single migration file within an existing transaction.
-   * Handles placeholder substitution and GO splitting.
    */
-  private async executeSingleWithinTransaction(
-    transaction: sql.Transaction,
-    migration: ResolvedMigration,
-    placeholderContext: PlaceholderContext
+  private async executeSingleMigration(
+    txn: ProviderTransaction,
+    migration: ResolvedMigration
   ): Promise<MigrationExecutionResult> {
-    const { SubstitutePlaceholders } = await import('../executor/placeholder');
-    const { SplitOnGO } = await import('../executor/sql-splitter');
     const { ComputeChecksum } = await import('../migration/checksum');
     const { ExtractErrorIdentifiers, FindContextLines } = await import('../executor/error-context');
     const { MigrationExecutionError } = await import('./errors');
@@ -950,7 +848,11 @@ export class Skyway {
     try {
       // Substitute placeholders
       const context: PlaceholderContext = {
-        ...placeholderContext,
+        DefaultSchema: this.config.Migrations.DefaultSchema,
+        Timestamp: new Date().toISOString(),
+        Database: this.config.Database.Database,
+        User: this.config.Database.User,
+        Table: this.config.Migrations.HistoryTable,
         Filename: migration.Filename,
       };
       const processedSQL = SubstitutePlaceholders(
@@ -959,33 +861,35 @@ export class Skyway {
         context
       );
 
-      // Flyway computes repeatable migration checksums AFTER placeholder substitution.
-      // This causes ${flyway:timestamp} to produce a new checksum each run,
-      // ensuring repeatable migrations always re-execute.
-      // Versioned/baseline migrations use the raw content checksum.
+      // Repeatable migrations: recompute checksum after placeholder substitution
       if (migration.Type === 'repeatable') {
         migration.Checksum = ComputeChecksum(processedSQL);
       }
 
-      // Split on GO
-      const batches = SplitOnGO(processedSQL);
+      // Split into batches using the provider's dialect-specific splitter
+      const batches = this.provider.SplitScript(processedSQL);
 
       this.callbacks.OnLog?.(
         `  Executing ${migration.Filename}: ${batches.length} batch(es)`
       );
 
-      // Execute each batch
+      // Execute each batch — capture per-batch failures with rich context
+      // so the CLI can render line ranges + error identifiers + the failed
+      // SQL. Uses the dialect-agnostic provider transaction (txn.Execute),
+      // which routes through SqlServerProvider's mssql Request or
+      // PostgresProvider's pg.PoolClient as appropriate.
       for (let i = 0; i < batches.length; i++) {
         const batch = batches[i];
         for (let repeat = 0; repeat < batch.RepeatCount; repeat++) {
           try {
-            const request = new sql.Request(transaction);
-            await request.batch(batch.SQL);
+            await txn.Execute(batch.SQL);
           } catch (batchErr) {
             const elapsedMS = Date.now() - startTime;
             const errorMessage = batchErr instanceof Error ? batchErr.message : String(batchErr);
 
-            // Extract identifiers from error and find related lines
+            // Extract identifiers from error and find related lines.
+            // Identifier patterns are tuned for SQL Server messages but degrade
+            // gracefully on PG (no matches → no context lines, still reports the batch).
             const identifiers = ExtractErrorIdentifiers(errorMessage);
             const contextLines = FindContextLines(batch.SQL, batch.StartLine, identifiers);
 
@@ -1036,15 +940,35 @@ export class Skyway {
   }
 
   /**
-   * Builds the placeholder context from current config and runtime state.
+   * Builds a HistoryInsertParams from a migration execution result.
    */
-  private buildPlaceholderContext(): PlaceholderContext {
+  private buildHistoryRecord(
+    migration: ResolvedMigration,
+    rank: number,
+    executionTimeMS: number
+  ): HistoryInsertParams {
+    let type: string;
+    switch (migration.Type) {
+      case 'baseline':
+        type = 'SQL_BASELINE';
+        break;
+      case 'versioned':
+      case 'repeatable':
+      default:
+        type = 'SQL';
+        break;
+    }
+
     return {
-      DefaultSchema: this.config.Migrations.DefaultSchema,
-      Timestamp: new Date().toISOString(),
-      Database: this.config.Database.Database,
-      User: this.config.Database.User,
-      Table: this.config.Migrations.HistoryTable,
+      InstalledRank: rank,
+      Version: migration.Version,
+      Description: migration.Description,
+      Type: type,
+      Script: migration.ScriptPath,
+      Checksum: migration.Checksum,
+      InstalledBy: this.config.Database.User,
+      ExecutionTime: executionTimeMS,
+      Success: true,
     };
   }
 

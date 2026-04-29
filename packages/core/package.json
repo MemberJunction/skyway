@@ -1,7 +1,7 @@
 {
   "name": "@memberjunction/skyway-core",
   "version": "0.5.3",
-  "description": "TypeScript-native Flyway-compatible database migration engine for SQL Server",
+  "description": "TypeScript-native Flyway-compatible database migration engine — core interfaces and orchestration",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
@@ -17,7 +17,7 @@
     "migration",
     "database",
     "sql-server",
-    "mssql",
+    "postgresql",
     "typescript"
   ],
   "license": "MIT",
@@ -30,12 +30,10 @@
     "directory": "packages/core"
   },
   "dependencies": {
-    "mssql": "^11.0.1",
     "fast-glob": "^3.3.2",
     "crc-32": "^1.2.2"
   },
   "devDependencies": {
-    "@types/mssql": "^9.1.5",
     "@types/node": "^20.0.0",
     "typescript": "^5.5.0"
   },

@@ -1,0 +1,132 @@
+name: Integration tests (real-DB)
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: "integration-${{ github.ref }}"
+  cancel-in-progress: true
+
+jobs:
+  postgres:
+    name: PostgreSQL — full Skyway lifecycle
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:14
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: skyway_integration
+        ports:
+          - 5432:5432
+        # Wait for PG to accept connections before the job starts running steps.
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: "npm"
+          cache-dependency-path: "package-lock.json"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build packages
+        run: npm run build
+
+      - name: Run unit tests
+        run: npm test
+
+      - name: PG integration test
+        env:
+          SKYWAY_PG_HOST: localhost
+          SKYWAY_PG_PORT: 5432
+          SKYWAY_PG_DATABASE: skyway_integration
+          SKYWAY_PG_USER: postgres
+          SKYWAY_PG_PASSWORD: postgres
+        run: npm run test:integration:pg
+
+  sqlserver:
+    name: SQL Server — full Skyway lifecycle
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+
+    services:
+      mssql:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: "Y"
+          MSSQL_SA_PASSWORD: "Skyway_Test_Password123!"
+          MSSQL_PID: "Developer"
+        ports:
+          - 1433:1433
+        # mssql doesn't ship a healthcheck out of the box; the test step waits
+        # itself via the explicit "wait for SQL Server" step below.
+        options: >-
+          --health-cmd "exit 0"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 1
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: "npm"
+          cache-dependency-path: "package-lock.json"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build packages
+        run: npm run build
+
+      - name: Wait for SQL Server to accept connections
+        # mssql takes ~30-60s to fully boot inside the container. Poll until
+        # we can run a trivial query rather than hard-sleeping a guess.
+        run: |
+          for i in $(seq 1 60); do
+            docker exec $(docker ps -qf "ancestor=mcr.microsoft.com/mssql/server:2022-latest") \
+              /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P 'Skyway_Test_Password123!' -Q "SELECT 1" \
+              && echo "SQL Server is ready" && exit 0
+            echo "Waiting for SQL Server (attempt $i/60)..."
+            sleep 2
+          done
+          echo "SQL Server did not become ready in 120s"
+          exit 1
+
+      - name: Create integration test database
+        run: |
+          docker exec $(docker ps -qf "ancestor=mcr.microsoft.com/mssql/server:2022-latest") \
+            /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P 'Skyway_Test_Password123!' \
+            -Q "IF DB_ID('skyway_integration') IS NULL CREATE DATABASE skyway_integration;"
+
+      - name: SQL Server integration test
+        env:
+          SKYWAY_MSSQL_HOST: localhost
+          SKYWAY_MSSQL_PORT: 1433
+          SKYWAY_MSSQL_DATABASE: skyway_integration
+          SKYWAY_MSSQL_USER: sa
+          SKYWAY_MSSQL_PASSWORD: "Skyway_Test_Password123!"
+        run: npm run test:integration:mssql

@@ -4,7 +4,7 @@
  */
 
 import { Skyway, SkywayConfig } from '@memberjunction/skyway-core';
-import { PrintInfoTable, LogInfo, LogError } from '../formatting';
+import { PrintInfoTable, LogInfo, LogError, LogConnectionInfo } from '../formatting';
 
 /**
  * Executes the info command: displays migration status.
@@ -15,7 +15,7 @@ export async function RunInfo(config: SkywayConfig): Promise<boolean> {
   const skyway = new Skyway(config);
 
   try {
-    LogInfo(`Database: ${config.Database.Server}:${config.Database.Port ?? 1433}/${config.Database.Database}`);
+    LogConnectionInfo(config);
     console.log();
 
     const statuses = await skyway.Info();

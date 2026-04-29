@@ -4,7 +4,7 @@
  */
 
 import { Skyway, SkywayConfig } from '@memberjunction/skyway-core';
-import { LogInfo, LogSuccess, LogError } from '../formatting';
+import { LogInfo, LogSuccess, LogError, LogConnectionInfo } from '../formatting';
 
 /**
  * Executes the clean command: drops all objects in the configured schema.
@@ -16,8 +16,7 @@ export async function RunClean(config: SkywayConfig): Promise<boolean> {
   skyway.OnProgress({ OnLog: LogInfo });
 
   try {
-    LogInfo(`Database: ${config.Database.Server}:${config.Database.Port ?? 1433}/${config.Database.Database}`);
-    LogInfo(`Schema: ${config.Migrations.DefaultSchema ?? 'dbo'}`);
+    LogConnectionInfo(config);
     console.log();
 
     const result = await skyway.Clean();

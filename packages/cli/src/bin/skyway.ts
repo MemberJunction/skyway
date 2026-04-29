@@ -33,8 +33,9 @@ program
 
 function addSharedOptions(cmd: Command): Command {
   return cmd
-    .option('-s, --server <host>', 'SQL Server hostname')
-    .option('-p, --port <port>', 'SQL Server port', parseInt)
+    .option('--dialect <dialect>', 'Database dialect: sqlserver or postgresql (default: sqlserver)')
+    .option('-s, --server <host>', 'Database server hostname')
+    .option('-p, --port <port>', 'Database server port', parseInt)
     .option('-d, --database <name>', 'Database name')
     .option('-u, --user <user>', 'Database user')
     .option('-P, --password <password>', 'Database password')
@@ -169,6 +170,7 @@ addSharedOptions(
  */
 function mapOptions(opts: Record<string, unknown>): CLIOptions {
   return {
+    Dialect: opts.dialect as string | undefined,
     Server: opts.server as string | undefined,
     Port: opts.port as number | undefined,
     Database: opts.database as string | undefined,

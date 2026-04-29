@@ -5,7 +5,14 @@
 
 import { Skyway } from '@memberjunction/skyway-core';
 import { SkywayConfig } from '@memberjunction/skyway-core';
-import { LogMigrationStart, LogMigrationEnd, LogInfo, LogError, LogBatchProgress, PrintMigrateSummary } from '../formatting';
+import {
+  LogMigrationStart,
+  LogMigrationEnd,
+  LogInfo,
+  LogBatchProgress,
+  PrintMigrateSummary,
+  LogConnectionInfo,
+} from '../formatting';
 
 /**
  * Executes the migrate command: applies all pending migrations.
@@ -31,8 +38,7 @@ export async function RunMigrate(config: SkywayConfig, quiet: boolean = false, v
   }
 
   try {
-    LogInfo(`Database: ${config.Database.Server}:${config.Database.Port ?? 1433}/${config.Database.Database}`);
-    LogInfo(`Schema: ${config.Migrations.DefaultSchema ?? 'dbo'}`);
+    LogConnectionInfo(config);
     LogInfo(`Locations: ${config.Migrations.Locations.join(', ')}`);
     LogInfo(`Transaction mode: ${config.TransactionMode ?? 'per-run'}`);
     if (config.Verbose || verbose) {
