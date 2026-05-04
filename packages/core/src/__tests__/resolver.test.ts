@@ -394,3 +394,222 @@ describe('ResolveMigrations — out-of-order', () => {
     expect(result.PendingMigrations[2].Version).toBe('202601020000');
   });
 });
+
+// ─── Baseline Floor From History ─────────────────────────────────────
+//
+// Once a baseline has been recorded in `flyway_schema_history`, that version
+// is a permanent floor: V-files at or below it are subsumed by the baseline
+// and must not be flagged as IGNORED, MISSING, or PENDING. The floor applies
+// regardless of `BaselineOnMigrate` (the flag only governs whether to *create*
+// a baseline on a fresh DB; the resolver still needs to honor an existing one).
+
+describe('ResolveMigrations — baseline floor from history', () => {
+  it('marks earlier V files as ABOVE_BASELINE when a BASELINE row exists in history', () => {
+    const discovered = [
+      makeMigration({ Version: '202301010000', Description: 'v1 Create Users' }),
+      makeMigration({ Version: '202401010000', Description: 'v2 Add Roles' }),
+      makeMigration({ Version: '202601020000', Description: 'v5 Add Audit' }),
+    ];
+    const applied = [
+      makeHistory({
+        InstalledRank: 1,
+        Version: '202601010000',
+        Type: 'BASELINE',
+        Description: 'Skyway baseline',
+        Checksum: null,
+      }),
+    ];
+
+    const result = ResolveMigrations(discovered, applied, '1', false, false);
+
+    expect(result.EffectiveBaselineVersion).toBe('202601010000');
+
+    // Earlier files must NOT appear as IGNORED
+    const ignored = result.StatusReport.filter((s) => s.State === 'IGNORED');
+    expect(ignored).toHaveLength(0);
+
+    // The two pre-baseline V files are subsumed
+    const aboveBaseline = result.StatusReport.filter((s) => s.State === 'ABOVE_BASELINE');
+    expect(aboveBaseline.map((s) => s.Version).sort()).toEqual([
+      '202301010000',
+      '202401010000',
+    ]);
+
+    // Only the post-baseline V file is pending
+    expect(result.PendingMigrations).toHaveLength(1);
+    expect(result.PendingMigrations[0].Version).toBe('202601020000');
+  });
+
+  it('treats SQL_BASELINE rows as floor (B-prefixed file that ran)', () => {
+    const discovered = [
+      makeMigration({ Version: '202301010000', Description: 'v1 Create Users' }),
+      makeMigration({ Version: '202601020000', Description: 'v5 Add Audit' }),
+    ];
+    const applied = [
+      makeHistory({
+        InstalledRank: 1,
+        Version: '202601010000',
+        Type: 'SQL_BASELINE',
+        Description: 'v5 Baseline',
+      }),
+    ];
+
+    const result = ResolveMigrations(discovered, applied, '1', false, false);
+
+    expect(result.EffectiveBaselineVersion).toBe('202601010000');
+    const aboveBaseline = result.StatusReport.filter((s) => s.State === 'ABOVE_BASELINE');
+    expect(aboveBaseline).toHaveLength(1);
+    expect(aboveBaseline[0].Version).toBe('202301010000');
+    expect(result.PendingMigrations).toHaveLength(1);
+    expect(result.PendingMigrations[0].Version).toBe('202601020000');
+  });
+
+  it('uses the highest baseline when multiple baseline rows exist in history', () => {
+    const discovered = [
+      makeMigration({ Version: '202501010000', Description: 'v4 Between Baselines' }),
+    ];
+    const applied = [
+      makeHistory({
+        InstalledRank: 1,
+        Version: '202401010000',
+        Type: 'BASELINE',
+        Description: 'old baseline',
+      }),
+      makeHistory({
+        InstalledRank: 2,
+        Version: '202601010000',
+        Type: 'BASELINE',
+        Description: 'new baseline',
+      }),
+    ];
+
+    const result = ResolveMigrations(discovered, applied, '1', false, false);
+
+    expect(result.EffectiveBaselineVersion).toBe('202601010000');
+    const status = result.StatusReport.find((s) => s.Version === '202501010000');
+    expect(status?.State).toBe('ABOVE_BASELINE');
+    expect(result.PendingMigrations).toHaveLength(0);
+  });
+
+  it('does not flag baseline-typed history records as MISSING when their file is gone', () => {
+    // Common case: the B*.sql bootstrap was deleted after running.
+    const discovered = [
+      makeMigration({ Version: '202601020000', Description: 'v5 Add Audit' }),
+    ];
+    const applied = [
+      makeHistory({
+        InstalledRank: 1,
+        Version: '202601010000',
+        Type: 'BASELINE',
+        Description: 'Baseline',
+      }),
+    ];
+
+    const result = ResolveMigrations(discovered, applied, '1', false, false);
+
+    const missing = result.StatusReport.filter((s) => s.State === 'MISSING');
+    expect(missing).toHaveLength(0);
+  });
+
+  it('does not flag pre-baseline SQL records as MISSING when their files are gone', () => {
+    // The pre-baseline V-files were applied long ago but have since been deleted
+    // from disk because the baseline replaces them. They must not appear as MISSING.
+    const discovered: ReturnType<typeof makeMigration>[] = [];
+    const applied = [
+      makeHistory({
+        InstalledRank: 1,
+        Version: '202401010000',
+        Type: 'SQL',
+        Description: 'old applied migration',
+      }),
+      makeHistory({
+        InstalledRank: 2,
+        Version: '202601010000',
+        Type: 'BASELINE',
+        Description: 'Baseline',
+      }),
+    ];
+
+    const result = ResolveMigrations(discovered, applied, '1', false, false);
+
+    const missing = result.StatusReport.filter((s) => s.State === 'MISSING');
+    expect(missing).toHaveLength(0);
+  });
+
+  it('still flags post-baseline V records as MISSING when their files are gone', () => {
+    // Records strictly above the floor are real V-migrations; their disk
+    // files going missing is still a real problem.
+    const discovered: ReturnType<typeof makeMigration>[] = [];
+    const applied = [
+      makeHistory({
+        InstalledRank: 1,
+        Version: '202601010000',
+        Type: 'BASELINE',
+        Description: 'Baseline',
+      }),
+      makeHistory({
+        InstalledRank: 2,
+        Version: '202601020000',
+        Type: 'SQL',
+        Description: 'Post-baseline migration',
+      }),
+    ];
+
+    const result = ResolveMigrations(discovered, applied, '1', false, false);
+
+    const missing = result.StatusReport.filter((s) => s.State === 'MISSING');
+    expect(missing).toHaveLength(1);
+    expect(missing[0].Version).toBe('202601020000');
+  });
+
+  it('reports a stale B-file below the floor as ABOVE_BASELINE', () => {
+    // The user kept the older B file around but a newer baseline has since run.
+    const discovered = [
+      makeMigration({ Type: 'baseline', Version: '202401010000', Description: 'v3 Baseline' }),
+      makeMigration({ Version: '202601020000', Description: 'v5 New Migration' }),
+    ];
+    const applied = [
+      makeHistory({
+        InstalledRank: 1,
+        Version: '202601010000',
+        Type: 'BASELINE',
+        Description: 'Baseline v5',
+      }),
+    ];
+
+    const result = ResolveMigrations(discovered, applied, '1', false, false);
+
+    expect(result.EffectiveBaselineVersion).toBe('202601010000');
+    const staleBaseline = result.StatusReport.find(
+      (s) => s.Version === '202401010000' && s.Type === 'baseline'
+    );
+    expect(staleBaseline?.State).toBe('ABOVE_BASELINE');
+
+    // Stale B file is not pending
+    expect(result.PendingMigrations.find((m) => m.Version === '202401010000')).toBeUndefined();
+    // Post-baseline V is pending
+    expect(result.PendingMigrations).toHaveLength(1);
+    expect(result.PendingMigrations[0].Version).toBe('202601020000');
+  });
+
+  it('regression — Validate flow: history baseline + earlier V on disk produces no IGNORED', () => {
+    // `Skyway.Validate()` walks StatusReport for IGNORED entries and reports
+    // them as validation errors. After this fix that should no longer fire
+    // for files subsumed by the floor.
+    const discovered = [
+      makeMigration({ Version: '202301010000', Description: 'pre-baseline' }),
+    ];
+    const applied = [
+      makeHistory({
+        InstalledRank: 1,
+        Version: '202601010000',
+        Type: 'BASELINE',
+        Description: 'Baseline',
+      }),
+    ];
+
+    const result = ResolveMigrations(discovered, applied, '1', false, false);
+
+    expect(result.StatusReport.find((s) => s.State === 'IGNORED')).toBeUndefined();
+  });
+});

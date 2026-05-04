@@ -89,6 +89,22 @@ export function ResolveMigrations(
   // Find the highest applied version
   const highestApplied = getHighestAppliedVersion(applied);
 
+  // Highest baseline version already recorded in history. A baseline row in
+  // history sets a permanent floor for resolution: any V-prefixed file at or
+  // below it is subsumed by the baseline and should be reported as
+  // ABOVE_BASELINE, not IGNORED/PENDING/MISSING. SQL_BASELINE = a B-prefixed
+  // file that ran; BASELINE = a `Skyway.Baseline()` marker.
+  let highestHistoryBaseline: string | null = null;
+  for (const record of applied) {
+    if (
+      (record.Type === 'BASELINE' || record.Type === 'SQL_BASELINE') &&
+      record.Version !== null &&
+      (highestHistoryBaseline === null || record.Version > highestHistoryBaseline)
+    ) {
+      highestHistoryBaseline = record.Version;
+    }
+  }
+
   // --- Resolve baseline migrations ---
   let effectiveBaselineVersion: string | null = null;
   let baselineAutoSelected = false;
@@ -123,6 +139,50 @@ export function ResolveMigrations(
     }
   }
 
+  // A baseline already in history sets the floor too — and on subsequent runs
+  // it's the only source. When both exist, the higher version wins so we
+  // never go backwards.
+  if (
+    highestHistoryBaseline !== null &&
+    (effectiveBaselineVersion === null || highestHistoryBaseline > effectiveBaselineVersion)
+  ) {
+    effectiveBaselineVersion = highestHistoryBaseline;
+  }
+
+  // Report status for baseline files on disk that weren't selected for execution
+  // (already-applied, or below the active floor). Without this, stale B files
+  // would silently disappear from `Info()` once the DB is no longer fresh.
+  for (const baseline of baselines) {
+    const alreadyPending = pending.some((m) => m === baseline);
+    if (alreadyPending) continue;
+    const appliedRecord = appliedByVersion.get(baseline.Version!);
+    if (appliedRecord) {
+      statusReport.push({
+        Type: 'baseline',
+        Version: baseline.Version,
+        Description: baseline.Description,
+        State: appliedRecord.Success === false ? 'FAILED' : 'BASELINE',
+        Script: baseline.ScriptPath,
+        DiskChecksum: baseline.Checksum,
+        AppliedChecksum: appliedRecord.Checksum,
+        InstalledOn: appliedRecord.InstalledOn,
+        ExecutionTime: appliedRecord.ExecutionTime,
+      });
+    } else if (effectiveBaselineVersion !== null && baseline.Version! <= effectiveBaselineVersion) {
+      statusReport.push({
+        Type: 'baseline',
+        Version: baseline.Version,
+        Description: baseline.Description,
+        State: 'ABOVE_BASELINE',
+        Script: baseline.ScriptPath,
+        DiskChecksum: baseline.Checksum,
+        AppliedChecksum: null,
+        InstalledOn: null,
+        ExecutionTime: null,
+      });
+    }
+  }
+
   // --- Resolve versioned migrations ---
   for (const migration of versioned) {
     const appliedRecord = appliedByVersion.get(migration.Version!);
@@ -143,8 +203,10 @@ export function ResolveMigrations(
         InstalledOn: appliedRecord.InstalledOn,
         ExecutionTime: appliedRecord.ExecutionTime,
       });
-    } else if (shouldBaseline && effectiveBaselineVersion !== null && migration.Version! <= effectiveBaselineVersion) {
-      // Below or at baseline — skip (baseline covers these)
+    } else if (effectiveBaselineVersion !== null && migration.Version! <= effectiveBaselineVersion) {
+      // At or below the baseline floor — the baseline subsumes this migration.
+      // Floor source is either the fresh-DB selection above or a baseline row
+      // already recorded in history.
       statusReport.push({
         Type: 'versioned',
         Version: migration.Version,
@@ -192,9 +254,16 @@ export function ResolveMigrations(
 
   // --- Report applied migrations not found on disk ---
   for (const record of applied) {
+    if (record.Version === null || record.Type === 'SCHEMA') continue;
+
+    // Baseline rows are typically one-shot bootstraps — the file gets pruned
+    // after the first successful run. Don't flag them as MISSING.
+    if (record.Type === 'BASELINE' || record.Type === 'SQL_BASELINE') continue;
+
+    // Records subsumed by the baseline floor are expected to be absent on disk.
+    if (effectiveBaselineVersion !== null && record.Version <= effectiveBaselineVersion) continue;
+
     if (
-      record.Version !== null &&
-      record.Type !== 'SCHEMA' &&
       !discovered.some(
         (m) => m.Version === record.Version && m.Type !== 'repeatable'
       )
