@@ -1,5 +1,14 @@
 # @memberjunction/skyway-cli
 
+## 0.6.1
+
+### Patch Changes
+
+- Updated dependencies [75eff77]
+  - @memberjunction/skyway-core@0.6.1
+  - @memberjunction/skyway-postgres@0.6.1
+  - @memberjunction/skyway-sqlserver@0.6.1
+
 ## 0.6.0
 
 ### Minor Changes

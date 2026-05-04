@@ -1,6 +1,6 @@
 {
   "name": "@memberjunction/skyway-postgres",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "PostgreSQL provider for the Skyway migration engine",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -32,7 +32,7 @@
     "directory": "packages/postgres"
   },
   "dependencies": {
-    "@memberjunction/skyway-core": "^0.6.0",
+    "@memberjunction/skyway-core": "^0.6.1",
     "pg": "^8.13.0"
   },
   "devDependencies": {
