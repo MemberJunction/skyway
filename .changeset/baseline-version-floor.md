@@ -9,6 +9,7 @@ A baseline migration recorded in `flyway_schema_history` now sets a permanent fl
 Previously, after a baseline ran, pre-baseline `V` files on disk would either be flagged as `IGNORED` (causing `Migrate()` to abort and `Validate()` to fail) or silently re-run as `PENDING` if they happened to be above `highestApplied`. Both were incorrect — a baseline by definition replaces the migration history below its version.
 
 Additional fixes:
-- Baseline-typed history records (`BASELINE`, `SQL_BASELINE`) are no longer reported as `MISSING` when their bootstrap files have been pruned from disk.
+- Baseline-typed history records (`BASELINE`, `SQL_BASELINE`) are no longer reported as `MISSING` when their bootstrap files have been pruned from disk — both by the `Info()` resolver and by `Validate()`'s separate disk-vs-history check.
 - Pre-baseline `SQL` history records are no longer reported as `MISSING` when their files are gone (the baseline subsumes them).
 - Stale `B` files on disk that sit below an already-applied baseline are reported as `ABOVE_BASELINE` instead of being silently dropped from the status report.
+- `Skyway.Validate()` now honors the same baseline floor as the resolver, so a baselined database with old `V` files on disk no longer fails validation.

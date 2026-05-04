@@ -397,8 +397,27 @@ export class Skyway {
       }
     }
 
+    // Run resolver up-front so we can use its EffectiveBaselineVersion as a
+    // floor below — records at/below the floor are subsumed by the baseline,
+    // their disk files are expected to be absent.
+    const resolution = ResolveMigrations(
+      discovered,
+      applied,
+      this.config.Migrations.BaselineVersion,
+      this.config.Migrations.BaselineOnMigrate,
+      this.config.Migrations.OutOfOrder
+    );
+    const floor = resolution.EffectiveBaselineVersion;
+
     for (const record of applied) {
       if (record.Version === null || record.Type === 'SCHEMA') continue;
+
+      // Baseline rows are one-shot bootstraps; their files get pruned after
+      // running. Don't flag them as missing-from-disk.
+      if (record.Type === 'BASELINE' || record.Type === 'SQL_BASELINE') continue;
+
+      // Anything at or below the floor is subsumed by the baseline.
+      if (floor !== null && record.Version <= floor) continue;
 
       const diskMigration = diskByVersion.get(record.Version);
       if (!diskMigration) {
@@ -420,15 +439,7 @@ export class Skyway {
       }
     }
 
-    // Check for out-of-order migrations
-    const resolution = ResolveMigrations(
-      discovered,
-      applied,
-      this.config.Migrations.BaselineVersion,
-      this.config.Migrations.BaselineOnMigrate,
-      this.config.Migrations.OutOfOrder
-    );
-
+    // Out-of-order detection — the resolver already classified these as IGNORED.
     for (const status of resolution.StatusReport) {
       if (status.State === 'IGNORED') {
         errors.push(
