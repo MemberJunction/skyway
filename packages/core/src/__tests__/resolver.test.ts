@@ -612,4 +612,109 @@ describe('ResolveMigrations — baseline floor from history', () => {
 
     expect(result.StatusReport.find((s) => s.State === 'IGNORED')).toBeUndefined();
   });
+
+  it('mixed BASELINE + SQL_BASELINE: most recent (highest) wins (MJ stacked-baseline scenario)', () => {
+    // Mirrors MJ's real history: an older v4 baseline ran from a B file
+    // (SQL_BASELINE), then a newer v5 baseline was inserted via Skyway.Baseline()
+    // (BASELINE). The latest dated baseline must drive the floor regardless of
+    // which mechanism produced the row.
+    const discovered = [
+      // v2-v4 era V files still on disk
+      makeMigration({ Version: '202301010000', Description: 'v2 Create Users' }),
+      makeMigration({ Version: '202401010000', Description: 'v3 Add Roles' }),
+      makeMigration({ Version: '202501010000', Description: 'v4 Add Permissions' }),
+      // post v5-baseline migration on disk
+      makeMigration({ Version: '202602160000', Description: 'v5 Add Audit' }),
+    ];
+    const applied = [
+      makeHistory({
+        InstalledRank: 1,
+        Version: '202502010000',
+        Type: 'SQL_BASELINE',
+        Description: 'v4 Baseline (older)',
+      }),
+      makeHistory({
+        InstalledRank: 2,
+        Version: '202602151200',
+        Type: 'BASELINE',
+        Description: 'v5 Baseline (most recent)',
+      }),
+    ];
+
+    const result = ResolveMigrations(discovered, applied, '1', false, false);
+
+    // Floor should be the most-recent-dated baseline.
+    expect(result.EffectiveBaselineVersion).toBe('202602151200');
+
+    // All three pre-v5-baseline V files are ABOVE_BASELINE.
+    const aboveBaseline = result.StatusReport.filter((s) => s.State === 'ABOVE_BASELINE');
+    expect(aboveBaseline.map((s) => s.Version).sort()).toEqual([
+      '202301010000',
+      '202401010000',
+      '202501010000',
+    ]);
+
+    // None ignored — pre-baseline V files must not trip the out-of-order check.
+    expect(result.StatusReport.filter((s) => s.State === 'IGNORED')).toHaveLength(0);
+
+    // Only the post-baseline V is pending.
+    expect(result.PendingMigrations).toHaveLength(1);
+    expect(result.PendingMigrations[0].Version).toBe('202602160000');
+  });
+
+  it('MJ-shaped scenario: B baseline file ran (SQL_BASELINE), pre/post V files coexist on disk', () => {
+    // Mirrors the actual layout in MJ/migrations/v5/:
+    //   B202602151200__v5.0__Baseline.sql        (recorded as SQL_BASELINE)
+    //   V202602131500__v5.0.x__...sql            (pre-baseline, rolled into B)
+    //   V202602141421__v5.0.x__...sql            (pre-baseline, rolled into B)
+    //   V202602161825__v5.0.x__Metadata_Sync.sql (post-baseline, runs normally)
+    //   V202602170015__v5.1__...sql              (post-baseline, runs normally)
+    //
+    // After the v5 baseline has been applied, only the V files above
+    // 202602151200 should be checked.
+    const discovered = [
+      makeMigration({ Type: 'baseline', Version: '202602151200', Description: 'v5.0 Baseline' }),
+      makeMigration({ Version: '202602131500', Description: 'v5.0.x pre-baseline 1' }),
+      makeMigration({ Version: '202602141421', Description: 'v5.0.x pre-baseline 2' }),
+      makeMigration({ Version: '202602161825', Description: 'v5.0.x post-baseline' }),
+      makeMigration({ Version: '202602170015', Description: 'v5.1 post-baseline' }),
+    ];
+    const applied = [
+      makeHistory({
+        InstalledRank: 1,
+        Version: '202602151200',
+        Type: 'SQL_BASELINE',
+        Description: 'v5.0 Baseline',
+      }),
+    ];
+
+    const result = ResolveMigrations(discovered, applied, '1', false, false);
+
+    expect(result.EffectiveBaselineVersion).toBe('202602151200');
+
+    // Both pre-baseline V files are subsumed.
+    const aboveBaseline = result.StatusReport.filter(
+      (s) => s.State === 'ABOVE_BASELINE' && s.Type === 'versioned'
+    );
+    expect(aboveBaseline.map((s) => s.Version).sort()).toEqual([
+      '202602131500',
+      '202602141421',
+    ]);
+
+    // Nothing IGNORED — proves the bug stays fixed.
+    expect(result.StatusReport.filter((s) => s.State === 'IGNORED')).toHaveLength(0);
+
+    // Post-baseline V files are PENDING and ready to run.
+    expect(result.PendingMigrations.map((m) => m.Version).sort()).toEqual([
+      '202602161825',
+      '202602170015',
+    ]);
+
+    // The B file on disk is reported alongside its history row (BASELINE state),
+    // not re-pending.
+    const bFileStatus = result.StatusReport.find(
+      (s) => s.Type === 'baseline' && s.Version === '202602151200'
+    );
+    expect(bFileStatus?.State).toBe('BASELINE');
+  });
 });
