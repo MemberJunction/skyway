@@ -61,11 +61,6 @@ function writeMigration(filename: string, sql: string): void {
   fs.writeFileSync(path.join(migrationsDir, filename), sql);
 }
 
-function removeMigration(filename: string): void {
-  const full = path.join(migrationsDir, filename);
-  if (fs.existsSync(full)) fs.unlinkSync(full);
-}
-
 function makeSkyway(): Skyway {
   // Construct a fresh Skyway each phase. Each instance owns its own pool,
   // and Close()ing between phases mirrors how a CLI invocation would behave —
@@ -204,8 +199,174 @@ async function main() {
       }
     }
 
-    // ─── Phase 8 — Clean ───────────────────────────────────────────
-    console.log('\n--- 8. Clean — drop everything ---');
+    // ─── Phase 8 — Stack a higher baseline on top ──────────────────
+    // State: history has BASELINE@202601010000, SCHEMA marker, and the
+    // V202601020000 we just applied. Now we stack a v6 baseline at
+    // version 202701010000 — simulating "MJ released v6, ran its baseline."
+    // Everything from before should be subsumed by the new baseline.
+    console.log('\n--- 8. Stack a higher baseline (v6) on top ---');
+    {
+      const provider = new SqlServerProvider(DB_CONFIG);
+      try {
+        // Direct insert to the history table — Skyway.Baseline() refuses to
+        // run when prior migration records exist. This simulates a scenario
+        // where a baseline row got there by other means (a SQL_BASELINE
+        // would be the normal path; we use BASELINE here for portability).
+        await provider.Connect();
+        const tx = await provider.BeginTransaction();
+        try {
+          const rank = await provider.History.GetNextRank('dbo', 'flyway_schema_history', tx);
+          await provider.History.InsertRecord('dbo', 'flyway_schema_history', {
+            InstalledRank: rank,
+            Version: '202701010000',
+            Description: '<< v6 stacked baseline >>',
+            Type: 'BASELINE',
+            Script: '<< v6 stacked baseline >>',
+            Checksum: null,
+            InstalledBy: DB_CONFIG.User,
+            ExecutionTime: 0,
+            Success: true,
+          }, tx);
+          await tx.Commit();
+          console.log(`    inserted v6 BASELINE row at version 202701010000 (rank ${rank})`);
+        } catch (e) {
+          await tx.Rollback();
+          throw e;
+        }
+      } finally {
+        await provider.Disconnect();
+      }
+    }
+
+    // ─── Phase 9 — Info: floor moves up to v6, prior V becomes ABOVE_BASELINE
+    console.log('\n--- 9. Info — floor moves up; prior post-v5 V is now subsumed ---');
+    {
+      const skyway = makeSkyway();
+      try {
+        const info = await skyway.Info();
+        for (const s of info) console.log(`    ${s.Version ?? '(R)'} | ${s.Type} | ${s.State} | ${s.Description}`);
+
+        // The previously-APPLIED v5-era V file is now BELOW the v6 floor.
+        // Its history row remains APPLIED (history is sticky) but Info() and
+        // resolution treat it as covered by the new baseline going forward.
+        // For the resolver, the row is in appliedByVersion → it'll show
+        // APPLIED (the resolver returns APPLIED before checking the floor).
+        // That's the correct behavior: history is the truth, the floor
+        // just suppresses re-running pre-floor V's that aren't in history.
+        const v5era = info.find((s) => s.Version === '202601020000');
+        check(v5era?.State === 'APPLIED', `previously-applied v5-era V remains APPLIED (got '${v5era?.State}')`);
+
+        // Pre-baseline V (was ABOVE_BASELINE under old floor) stays ABOVE_BASELINE.
+        const preV = info.find((s) => s.Version === '202301010000');
+        check(preV?.State === 'ABOVE_BASELINE', `pre-baseline V is still ABOVE_BASELINE under v6 floor (got '${preV?.State}')`);
+
+        // No IGNORED entries.
+        check(info.every((s) => s.State !== 'IGNORED'), 'no IGNORED entries with stacked baseline');
+      } finally {
+        await skyway.Close();
+      }
+    }
+
+    // ─── Phase 10 — Add a V file BETWEEN the two baselines; should be ABOVE_BASELINE
+    console.log('\n--- 10. Add V202602010000 (between v5 and v6 baselines) ---');
+    writeMigration(
+      'V202602010000__between_baselines.sql',
+      // Same intentional gibberish as the pre-baseline V — if it actually
+      // tries to run, SQL Server will reject it.
+      'CREATE TABLE between_should_never_run (id INT NOT NULL, ' +
+      'CONSTRAINT cant_have_two_pks PRIMARY KEY (id), ' +
+      'CONSTRAINT also_cant_have_two_pks PRIMARY KEY (id));\n',
+    );
+    {
+      const skyway = makeSkyway();
+      try {
+        const info = await skyway.Info();
+        const between = info.find((s) => s.Version === '202602010000');
+        check(between?.State === 'ABOVE_BASELINE', `between-baselines V is ABOVE_BASELINE (got '${between?.State}')`);
+
+        const validate = await skyway.Validate();
+        check(validate.Valid, `Validate.Valid with between-baselines V on disk (errors: ${validate.Errors.join('; ')})`);
+
+        const migrate = await skyway.Migrate();
+        check(migrate.Success, `Migrate.Success no-op with between-baselines V (error: ${migrate.ErrorMessage ?? '<none>'})`);
+        check(migrate.MigrationsApplied === 0, `Applied 0 (got ${migrate.MigrationsApplied})`);
+      } finally {
+        await skyway.Close();
+      }
+    }
+
+    // ─── Phase 11 — Add a V file ABOVE the v6 floor; should apply ─
+    console.log('\n--- 11. Add V202702010000 (above v6 floor) → should apply ---');
+    writeMigration(
+      'V202702010000__after_v6.sql',
+      'CREATE TABLE after_v6_smoke (id INT NOT NULL PRIMARY KEY);\n',
+    );
+    {
+      const skyway = makeSkyway();
+      try {
+        const migrate = await skyway.Migrate();
+        check(migrate.Success, `Migrate.Success applying post-v6 V (error: ${migrate.ErrorMessage ?? '<none>'})`);
+        check(migrate.MigrationsApplied === 1, `Applied 1 (got ${migrate.MigrationsApplied})`);
+        check(migrate.CurrentVersion === '202702010000', `CurrentVersion = '202702010000' (got '${migrate.CurrentVersion}')`);
+      } finally {
+        await skyway.Close();
+      }
+    }
+
+    // ─── Phase 12 — Insert an OLDER baseline row (out-of-order install) ─
+    // Proves the floor uses highest-version, not most-recent-insert.
+    console.log('\n--- 12. Insert an OLDER baseline (rank 100) — floor must NOT regress ---');
+    {
+      const provider = new SqlServerProvider(DB_CONFIG);
+      try {
+        await provider.Connect();
+        const tx = await provider.BeginTransaction();
+        try {
+          const rank = await provider.History.GetNextRank('dbo', 'flyway_schema_history', tx);
+          await provider.History.InsertRecord('dbo', 'flyway_schema_history', {
+            InstalledRank: rank,
+            Version: '202401010000',
+            Description: '<< v3 stacked baseline (older) >>',
+            Type: 'BASELINE',
+            Script: '<< v3 stacked baseline (older) >>',
+            Checksum: null,
+            InstalledBy: DB_CONFIG.User,
+            ExecutionTime: 0,
+            Success: true,
+          }, tx);
+          await tx.Commit();
+          console.log(`    inserted older v3 BASELINE row at rank ${rank} (above newer baseline's rank)`);
+        } catch (e) {
+          await tx.Rollback();
+          throw e;
+        }
+      } finally {
+        await provider.Disconnect();
+      }
+    }
+    {
+      const skyway = makeSkyway();
+      try {
+        const info = await skyway.Info();
+        // The post-v6 V we just applied stays APPLIED — the floor didn't
+        // regress to v3 just because the v3 baseline was inserted later.
+        const postV6 = info.find((s) => s.Version === '202702010000');
+        check(postV6?.State === 'APPLIED', `post-v6 V stays APPLIED (got '${postV6?.State}')`);
+
+        // The between-baselines V stays ABOVE_BASELINE under v6 floor.
+        const between = info.find((s) => s.Version === '202602010000');
+        check(between?.State === 'ABOVE_BASELINE', `between-baselines V stays ABOVE_BASELINE (got '${between?.State}')`);
+
+        // Validate stays clean.
+        const validate = await skyway.Validate();
+        check(validate.Valid, `Validate stays Valid after out-of-order baseline insert (errors: ${validate.Errors.join('; ')})`);
+      } finally {
+        await skyway.Close();
+      }
+    }
+
+    // ─── Phase 13 — Clean ──────────────────────────────────────────
+    console.log('\n--- 13. Clean — drop everything ---');
     {
       const skyway = makeSkyway();
       try {
@@ -230,9 +391,7 @@ async function main() {
   } finally {
     // Best-effort temp dir cleanup
     try {
-      removeMigration('V202301010000__pre_baseline.sql');
-      removeMigration('V202601020000__post_baseline.sql');
-      fs.rmdirSync(migrationsDir);
+      fs.rmSync(migrationsDir, { recursive: true, force: true });
     } catch {
       // ignore
     }

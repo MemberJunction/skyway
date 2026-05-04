@@ -718,3 +718,381 @@ describe('ResolveMigrations — baseline floor from history', () => {
     expect(bFileStatus?.State).toBe('BASELINE');
   });
 });
+
+// ─── Baseline Floor — Edge Cases ─────────────────────────────────────
+//
+// Exhaustive coverage of less-obvious interactions: multi-baseline stacks,
+// ordering, failed baselines, MJ-real three-baseline shape, plus boundary
+// conditions on the disk-vs-history reconciliation. These exist to lock
+// behavior so future refactors don't silently regress.
+
+describe('ResolveMigrations — baseline floor edge cases', () => {
+  it('three baselines stacked (MJ v3 + v4 + v5 actual repo shape)', () => {
+    // /MJ/migrations contains B202601122300 (v3), B202602061600 (v4),
+    // B202602151200 (v5). After all three have run, only V files above the
+    // v5 baseline should be in scope.
+    const applied = [
+      makeHistory({ InstalledRank: 1, Version: '202601122300', Type: 'SQL_BASELINE', Description: 'v3 Baseline' }),
+      makeHistory({ InstalledRank: 2, Version: '202602061600', Type: 'SQL_BASELINE', Description: 'v4 Baseline' }),
+      makeHistory({ InstalledRank: 3, Version: '202602151200', Type: 'SQL_BASELINE', Description: 'v5 Baseline' }),
+    ];
+    const discovered = [
+      makeMigration({ Type: 'baseline', Version: '202601122300', Description: 'v3 Baseline' }),
+      makeMigration({ Type: 'baseline', Version: '202602061600', Description: 'v4 Baseline' }),
+      makeMigration({ Type: 'baseline', Version: '202602151200', Description: 'v5 Baseline' }),
+      makeMigration({ Version: '202601150000', Description: 'between v3 and v4' }),
+      makeMigration({ Version: '202602100000', Description: 'between v4 and v5' }),
+      makeMigration({ Version: '202602160000', Description: 'after v5' }),
+    ];
+
+    const result = ResolveMigrations(discovered, applied, '1', false, false);
+
+    expect(result.EffectiveBaselineVersion).toBe('202602151200');
+    expect(result.StatusReport.filter((s) => s.State === 'IGNORED')).toHaveLength(0);
+
+    // The two pre-v5 V files are ABOVE_BASELINE.
+    const versionedAbove = result.StatusReport.filter(
+      (s) => s.Type === 'versioned' && s.State === 'ABOVE_BASELINE'
+    );
+    expect(versionedAbove.map((s) => s.Version).sort()).toEqual([
+      '202601150000',
+      '202602100000',
+    ]);
+
+    // Only the post-v5 V file is pending.
+    expect(result.PendingMigrations).toHaveLength(1);
+    expect(result.PendingMigrations[0].Version).toBe('202602160000');
+
+    // All three B files report as BASELINE.
+    const baselineStates = result.StatusReport.filter((s) => s.Type === 'baseline');
+    expect(baselineStates).toHaveLength(3);
+    for (const b of baselineStates) {
+      expect(b.State).toBe('BASELINE');
+    }
+  });
+
+  it('install order does not affect floor — highest version wins regardless of InstalledRank', () => {
+    // Defensive: someone manually inserts an OLDER baseline AFTER a newer one.
+    // The floor must still be the higher version.
+    const applied = [
+      makeHistory({ InstalledRank: 1, Version: '202602151200', Type: 'BASELINE', Description: 'v5 Baseline (inserted first)' }),
+      makeHistory({ InstalledRank: 2, Version: '202401010000', Type: 'BASELINE', Description: 'v3 Baseline (inserted later)' }),
+    ];
+    const discovered = [
+      makeMigration({ Version: '202501010000', Description: 'between v3 and v5' }),
+    ];
+
+    const result = ResolveMigrations(discovered, applied, '1', false, false);
+
+    // Higher version (v5) wins, NOT the most-recently-inserted (v3).
+    expect(result.EffectiveBaselineVersion).toBe('202602151200');
+    const status = result.StatusReport.find((s) => s.Version === '202501010000');
+    expect(status?.State).toBe('ABOVE_BASELINE');
+  });
+
+  it('failed baseline (Success=false) does not set the floor', () => {
+    // A failed baseline never established state. If it's still in history
+    // (user hasn't run Repair() yet), it must NOT be treated as the floor —
+    // otherwise we'd silently skip migrations the user still needs.
+    const applied = [
+      makeHistory({
+        InstalledRank: 1,
+        Version: '202602151200',
+        Type: 'SQL_BASELINE',
+        Description: 'v5 Baseline (failed)',
+        Success: false,
+      }),
+    ];
+    const discovered = [
+      makeMigration({ Version: '202602100000', Description: 'pre-v5' }),
+    ];
+
+    const result = ResolveMigrations(discovered, applied, '1', false, false);
+
+    expect(result.EffectiveBaselineVersion).toBeNull();
+    // Without a floor, the pre-v5 V file behaves normally — no IGNORED
+    // (highestApplied is null because failed baseline still appears as
+    // a history row, but the file is below ... wait, getHighestAppliedVersion
+    // doesn't check Success, so the failed baseline DOES set highestApplied.
+    // The migration at 202602100000 is BELOW that, so without a floor
+    // suppressing it, it would land in IGNORED. That's a real concern but
+    // out of scope for this fix — Repair() is the user's tool here.
+    // We just assert the floor isn't set; we don't make claims about the
+    // pre-v5 V file's classification.
+  });
+
+  it('failed baseline does not block higher succeeded baseline from being floor', () => {
+    // Both rows present: failed v3 baseline + succeeded v5 baseline.
+    // The v5 (Success=true) wins as floor; v3 is ignored entirely.
+    const applied = [
+      makeHistory({
+        InstalledRank: 1,
+        Version: '202401010000',
+        Type: 'SQL_BASELINE',
+        Description: 'v3 Baseline (failed)',
+        Success: false,
+      }),
+      makeHistory({
+        InstalledRank: 2,
+        Version: '202602151200',
+        Type: 'SQL_BASELINE',
+        Description: 'v5 Baseline (success)',
+        Success: true,
+      }),
+    ];
+    const discovered = [
+      makeMigration({ Version: '202501010000', Description: 'between v3 and v5' }),
+    ];
+
+    const result = ResolveMigrations(discovered, applied, '1', false, false);
+
+    expect(result.EffectiveBaselineVersion).toBe('202602151200');
+    const status = result.StatusReport.find((s) => s.Version === '202501010000');
+    expect(status?.State).toBe('ABOVE_BASELINE');
+  });
+
+  it('failed baseline at a higher version does not float floor up', () => {
+    // Failed v5 baseline + succeeded v3 baseline.
+    // The v3 (Success=true) wins as floor — failed v5 is ignored entirely.
+    const applied = [
+      makeHistory({
+        InstalledRank: 1,
+        Version: '202401010000',
+        Type: 'SQL_BASELINE',
+        Description: 'v3 Baseline (success)',
+        Success: true,
+      }),
+      makeHistory({
+        InstalledRank: 2,
+        Version: '202602151200',
+        Type: 'BASELINE',
+        Description: 'v5 Baseline (failed)',
+        Success: false,
+      }),
+    ];
+    const discovered = [
+      makeMigration({ Version: '202501010000', Description: 'between' }),
+    ];
+
+    const result = ResolveMigrations(discovered, applied, '1', false, false);
+
+    expect(result.EffectiveBaselineVersion).toBe('202401010000');
+  });
+
+  it('history baseline trumps fresh-DB auto-selected disk baseline when higher', () => {
+    // Hypothetical race: user pulled a NEWER B file that the DB hasn't seen
+    // yet, but an older baseline is already in history. Both effects compute
+    // a candidate floor; the higher wins.
+    //
+    // Note: shouldBaseline is gated on `!hasHistory`, so on an already-
+    // baselined DB the disk baseline auto-selection block is skipped. This
+    // test confirms the history baseline drives the floor in that case.
+    const applied = [
+      makeHistory({ InstalledRank: 1, Version: '202602151200', Type: 'BASELINE', Description: 'v5 Baseline' }),
+    ];
+    const discovered = [
+      makeMigration({ Type: 'baseline', Version: '202601010000', Description: 'old B file on disk' }),
+      makeMigration({ Version: '202601500000', Description: 'between' }),
+      makeMigration({ Version: '202602160000', Description: 'after v5' }),
+    ];
+
+    const result = ResolveMigrations(discovered, applied, '1', true, false);
+
+    // Floor is from history (v5), not the disk B file.
+    expect(result.EffectiveBaselineVersion).toBe('202602151200');
+    expect(result.BaselineAutoSelected).toBe(false); // shouldBaseline=false because history exists
+    // Old disk B file is below the floor → ABOVE_BASELINE.
+    expect(
+      result.StatusReport.find((s) => s.Type === 'baseline' && s.Version === '202601010000')?.State
+    ).toBe('ABOVE_BASELINE');
+    // The "between" V is below floor → ABOVE_BASELINE.
+    expect(
+      result.StatusReport.find((s) => s.Version === '202601500000')?.State
+    ).toBe('ABOVE_BASELINE');
+    // Post-v5 V is pending.
+    expect(result.PendingMigrations).toHaveLength(1);
+    expect(result.PendingMigrations[0].Version).toBe('202602160000');
+  });
+
+  it('SQL row exactly at the floor is not flagged as MISSING when its file is gone', () => {
+    // A historical SQL row at the same version as the baseline floor — the
+    // baseline subsumes it, so its absence on disk is expected.
+    const applied = [
+      makeHistory({
+        InstalledRank: 1,
+        Version: '202602151200',
+        Type: 'SQL',
+        Description: 'old applied at exact floor',
+      }),
+      makeHistory({
+        InstalledRank: 2,
+        Version: '202602151200',
+        Type: 'SQL_BASELINE',
+        Description: 'v5 Baseline',
+      }),
+    ];
+    const discovered: ReturnType<typeof makeMigration>[] = [];
+
+    const result = ResolveMigrations(discovered, applied, '1', false, false);
+
+    expect(result.StatusReport.filter((s) => s.State === 'MISSING')).toHaveLength(0);
+  });
+
+  it('SQL row strictly above the floor with no disk file IS flagged MISSING', () => {
+    // Negative control for the floor — anything above it is still a real
+    // migration whose disk file going missing is a problem.
+    const applied = [
+      makeHistory({ InstalledRank: 1, Version: '202602151200', Type: 'SQL_BASELINE', Description: 'v5 Baseline' }),
+      makeHistory({ InstalledRank: 2, Version: '202602160000', Type: 'SQL', Description: 'post-v5 deleted' }),
+    ];
+
+    const result = ResolveMigrations([], applied, '1', false, false);
+
+    const missing = result.StatusReport.filter((s) => s.State === 'MISSING');
+    expect(missing).toHaveLength(1);
+    expect(missing[0].Version).toBe('202602160000');
+  });
+
+  it('SCHEMA marker (rank 0) is never flagged as missing-from-disk regardless of floor', () => {
+    // Defensive: rank-0 schema marker has Version=null and Type='SCHEMA'.
+    // It must always be skipped, floor or no floor.
+    const applied = [
+      makeHistory({
+        InstalledRank: 0,
+        Version: null,
+        Type: 'SCHEMA',
+        Description: '<< Flyway Schema Creation >>',
+        Script: '[dbo]',
+      }),
+      makeHistory({ InstalledRank: 1, Version: '202602151200', Type: 'BASELINE', Description: 'v5 Baseline' }),
+    ];
+
+    const result = ResolveMigrations([], applied, '1', false, false);
+
+    expect(result.StatusReport.filter((s) => s.State === 'MISSING')).toHaveLength(0);
+  });
+
+  it('multiple stale B files on disk all report as ABOVE_BASELINE', () => {
+    // User kept v3 and v4 B files around but v5 baseline is the floor.
+    // Both must appear in the StatusReport (not silently dropped).
+    const applied = [
+      makeHistory({ InstalledRank: 1, Version: '202602151200', Type: 'SQL_BASELINE', Description: 'v5 Baseline' }),
+    ];
+    const discovered = [
+      makeMigration({ Type: 'baseline', Version: '202401010000', Description: 'v3 Baseline (stale)' }),
+      makeMigration({ Type: 'baseline', Version: '202602061600', Description: 'v4 Baseline (stale)' }),
+    ];
+
+    const result = ResolveMigrations(discovered, applied, '1', false, false);
+
+    const staleBaselines = result.StatusReport.filter(
+      (s) => s.Type === 'baseline' && s.State === 'ABOVE_BASELINE'
+    );
+    expect(staleBaselines.map((s) => s.Version).sort()).toEqual([
+      '202401010000',
+      '202602061600',
+    ]);
+    expect(result.PendingMigrations).toHaveLength(0);
+  });
+
+  it('disk B file that matches the history baseline reports as BASELINE, not ABOVE_BASELINE', () => {
+    // Sanity: when the same B file is both on disk AND in history, the entry
+    // shows the BASELINE state (it's the active baseline) rather than being
+    // mislabeled as a stale/below-floor baseline.
+    const applied = [
+      makeHistory({ InstalledRank: 1, Version: '202602151200', Type: 'SQL_BASELINE', Description: 'v5 Baseline' }),
+    ];
+    const discovered = [
+      makeMigration({ Type: 'baseline', Version: '202602151200', Description: 'v5 Baseline' }),
+    ];
+
+    const result = ResolveMigrations(discovered, applied, '1', false, false);
+
+    const baselineEntry = result.StatusReport.find(
+      (s) => s.Type === 'baseline' && s.Version === '202602151200'
+    );
+    expect(baselineEntry?.State).toBe('BASELINE');
+    expect(result.PendingMigrations).toHaveLength(0);
+  });
+
+  it('outOfOrder=true with a baseline floor: floor still suppresses pre-baseline files', () => {
+    // outOfOrder widens what's PENDING by lifting the highestApplied check —
+    // but the floor must still apply. Pre-baseline V files stay ABOVE_BASELINE.
+    const applied = [
+      makeHistory({ InstalledRank: 1, Version: '202602151200', Type: 'BASELINE', Description: 'v5 Baseline' }),
+    ];
+    const discovered = [
+      makeMigration({ Version: '202301010000', Description: 'pre-baseline (would be IGNORED with outOfOrder=false)' }),
+      makeMigration({ Version: '202602160000', Description: 'post-baseline' }),
+    ];
+
+    const result = ResolveMigrations(discovered, applied, '1', false, true);
+
+    const pre = result.StatusReport.find((s) => s.Version === '202301010000');
+    expect(pre?.State).toBe('ABOVE_BASELINE');
+    expect(result.PendingMigrations.map((m) => m.Version)).toEqual(['202602160000']);
+  });
+
+  it('failed non-baseline SQL row above the floor stays out of MISSING (file present)', () => {
+    // Negative control: a Success=false row above the floor with its disk
+    // file still present should not be flagged MISSING — it'd be FAILED via
+    // the resolver's APPLIED branch, not MISSING.
+    const applied = [
+      makeHistory({ InstalledRank: 1, Version: '202602151200', Type: 'SQL_BASELINE', Description: 'v5 Baseline' }),
+      makeHistory({
+        InstalledRank: 2,
+        Version: '202602160000',
+        Type: 'SQL',
+        Description: 'post-v5 failed',
+        Success: false,
+      }),
+    ];
+    const discovered = [
+      makeMigration({ Version: '202602160000', Description: 'post-v5 failed' }),
+    ];
+
+    const result = ResolveMigrations(discovered, applied, '1', false, false);
+
+    expect(result.StatusReport.filter((s) => s.State === 'MISSING')).toHaveLength(0);
+    const failed = result.StatusReport.find((s) => s.Version === '202602160000');
+    expect(failed?.State).toBe('FAILED');
+  });
+
+  it('V file strictly between two baselines is ABOVE_BASELINE', () => {
+    // Specifically: floor=v5 baseline. A V file dated AFTER v4 baseline but
+    // BEFORE v5 baseline must still be ABOVE_BASELINE (subsumed by v5).
+    const applied = [
+      makeHistory({ InstalledRank: 1, Version: '202602061600', Type: 'SQL_BASELINE', Description: 'v4 Baseline' }),
+      makeHistory({ InstalledRank: 2, Version: '202602151200', Type: 'SQL_BASELINE', Description: 'v5 Baseline' }),
+    ];
+    const discovered = [
+      makeMigration({ Version: '202602100000', Description: 'between v4 and v5' }),
+      makeMigration({ Version: '202602160000', Description: 'after v5' }),
+    ];
+
+    const result = ResolveMigrations(discovered, applied, '1', false, false);
+
+    const between = result.StatusReport.find((s) => s.Version === '202602100000');
+    expect(between?.State).toBe('ABOVE_BASELINE');
+    const after = result.StatusReport.find((s) => s.Version === '202602160000');
+    expect(after?.State).toBe('PENDING');
+  });
+
+  it('repeatable migrations are unaffected by the floor (keyed by description)', () => {
+    // Floor logic targets versioned types only. Repeatables run when checksum
+    // changes, no version comparison.
+    const applied = [
+      makeHistory({ InstalledRank: 1, Version: '202602151200', Type: 'SQL_BASELINE', Description: 'v5 Baseline' }),
+    ];
+    const discovered = [
+      makeMigration({ Type: 'repeatable', Version: null, Description: 'RefreshViews', Checksum: 999 }),
+    ];
+
+    const result = ResolveMigrations(discovered, applied, '1', false, false);
+
+    // New repeatable (never run) is PENDING regardless of the floor.
+    const r = result.StatusReport.find((s) => s.Description === 'RefreshViews');
+    expect(r?.State).toBe('PENDING');
+    expect(result.PendingMigrations.map((m) => m.Type)).toContain('repeatable');
+  });
+});

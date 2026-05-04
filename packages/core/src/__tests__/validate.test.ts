@@ -303,3 +303,183 @@ describe('Skyway.Validate() — baseline floor', () => {
     expect(result.Errors).toHaveLength(0);
   });
 });
+
+// ─── Validate() — Edge Cases ─────────────────────────────────────────
+
+describe('Skyway.Validate() — edge cases', () => {
+  it('three-baseline stack (MJ v3 + v4 + v5) — only post-v5 V files validated', async () => {
+    const provider = new FakeProvider({
+      Server: 'localhost',
+      Database: 'test',
+      User: 'sa',
+      Password: 'x',
+    });
+    provider.History.records = [
+      makeHistoryRecord({ InstalledRank: 1, Version: '202601122300', Type: 'SQL_BASELINE', Description: 'v3 Baseline' }),
+      makeHistoryRecord({ InstalledRank: 2, Version: '202602061600', Type: 'SQL_BASELINE', Description: 'v4 Baseline' }),
+      makeHistoryRecord({ InstalledRank: 3, Version: '202602151200', Type: 'SQL_BASELINE', Description: 'v5 Baseline' }),
+      makeHistoryRecord({
+        InstalledRank: 4,
+        Version: '202602160000',
+        Type: 'SQL',
+        Description: 'post-v5 metadata sync',
+        // Checksum=null means "no checksum to compare against" — keeps the
+        // test focused on floor behavior, not checksum validation.
+        Checksum: null,
+      }),
+    ];
+    writeMigration('V202602160000__post_baseline.sql', 'SELECT 1;\n');
+
+    const result = await makeSkyway(provider).Validate();
+    expect(result.Valid).toBe(true);
+    expect(result.Errors).toHaveLength(0);
+  });
+
+  it('install order does not affect floor — older baseline inserted after newer one is ignored', async () => {
+    const provider = new FakeProvider({
+      Server: 'localhost',
+      Database: 'test',
+      User: 'sa',
+      Password: 'x',
+    });
+    provider.History.records = [
+      makeHistoryRecord({ InstalledRank: 1, Version: '202602151200', Type: 'BASELINE', Description: 'v5 (inserted first)' }),
+      makeHistoryRecord({ InstalledRank: 2, Version: '202401010000', Type: 'BASELINE', Description: 'v3 (inserted later)' }),
+    ];
+    // V file between v3 and v5 — must be subsumed by v5 (the higher version).
+    writeMigration('V202501010000__between.sql');
+
+    const result = await makeSkyway(provider).Validate();
+    expect(result.Valid).toBe(true);
+    expect(result.Errors).toHaveLength(0);
+  });
+
+  it('failed baseline does not set the floor — old SQL row is then a real MISSING', async () => {
+    // Failed v5 baseline + real SQL row at v3 with no disk file.
+    // Without the floor, the SQL row goes into the disk-vs-history check
+    // and is correctly reported as missing. (User would Repair() to fix it.)
+    const provider = new FakeProvider({
+      Server: 'localhost',
+      Database: 'test',
+      User: 'sa',
+      Password: 'x',
+    });
+    provider.History.records = [
+      makeHistoryRecord({
+        InstalledRank: 1,
+        Version: '202602151200',
+        Type: 'SQL_BASELINE',
+        Description: 'v5 Baseline (failed)',
+        Success: false,
+      }),
+      makeHistoryRecord({
+        InstalledRank: 2,
+        Version: '202401010000',
+        Type: 'SQL',
+        Description: 'old SQL row, file gone',
+        Checksum: 12345,
+      }),
+    ];
+    // No disk files.
+
+    const result = await makeSkyway(provider).Validate();
+    expect(result.Valid).toBe(false);
+    expect(result.Errors.some((e) => /202401010000/.test(e))).toBe(true);
+  });
+
+  it('SCHEMA marker (rank 0) is never flagged regardless of floor', async () => {
+    const provider = new FakeProvider({
+      Server: 'localhost',
+      Database: 'test',
+      User: 'sa',
+      Password: 'x',
+    });
+    provider.History.records = [
+      makeHistoryRecord({
+        InstalledRank: 0,
+        Version: null,
+        Type: 'SCHEMA',
+        Description: '<< Flyway Schema Creation >>',
+        Script: '[dbo]',
+      }),
+      makeHistoryRecord({ InstalledRank: 1, Version: '202602151200', Type: 'BASELINE', Description: 'v5 Baseline' }),
+    ];
+
+    const result = await makeSkyway(provider).Validate();
+    expect(result.Valid).toBe(true);
+  });
+
+  it('checksum mismatch on a row exactly at the floor: not flagged (subsumed)', async () => {
+    // Edge case: a SQL row at exactly the floor version. Without the floor,
+    // it would be checksum-checked. With the floor, it's subsumed and
+    // skipped — no checksum check, no missing-file check.
+    const provider = new FakeProvider({
+      Server: 'localhost',
+      Database: 'test',
+      User: 'sa',
+      Password: 'x',
+    });
+    provider.History.records = [
+      makeHistoryRecord({
+        InstalledRank: 1,
+        Version: '202602151200',
+        Type: 'SQL',
+        Description: 'pre-existing applied at floor',
+        Checksum: 999, // intentionally wrong
+      }),
+      makeHistoryRecord({
+        InstalledRank: 2,
+        Version: '202602151200',
+        Type: 'SQL_BASELINE',
+        Description: 'v5 Baseline',
+      }),
+    ];
+    // Disk file is present with a different checksum, but the floor subsumes it.
+    writeMigration('V202602151200__pre_baseline.sql', 'SELECT 1;\n');
+
+    const result = await makeSkyway(provider).Validate();
+    expect(result.Valid).toBe(true);
+    expect(result.Errors).toHaveLength(0);
+  });
+
+  it('no history baseline + missing disk file → MISSING is still reported', async () => {
+    // Negative control: without any baseline the floor is null and the
+    // disk-vs-history check should run normally.
+    const provider = new FakeProvider({
+      Server: 'localhost',
+      Database: 'test',
+      User: 'sa',
+      Password: 'x',
+    });
+    provider.History.records = [
+      makeHistoryRecord({
+        InstalledRank: 1,
+        Version: '202601010000',
+        Type: 'SQL',
+        Description: 'real applied migration, file gone',
+        Checksum: 12345,
+      }),
+    ];
+
+    const result = await makeSkyway(provider).Validate();
+    expect(result.Valid).toBe(false);
+    expect(result.Errors.some((e) => /no longer found on disk/.test(e))).toBe(true);
+  });
+
+  it('history table does not exist → returns Valid: true with no errors', async () => {
+    // Existing behavior: Validate() short-circuits when there's no history
+    // table at all. Locking it because the new logic moved the resolver call
+    // up; we don't want to accidentally break the short-circuit.
+    const provider = new FakeProvider({
+      Server: 'localhost',
+      Database: 'test',
+      User: 'sa',
+      Password: 'x',
+    });
+    provider.History.exists = false;
+
+    const result = await makeSkyway(provider).Validate();
+    expect(result.Valid).toBe(true);
+    expect(result.Errors).toHaveLength(0);
+  });
+});

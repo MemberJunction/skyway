@@ -94,11 +94,16 @@ export function ResolveMigrations(
   // below it is subsumed by the baseline and should be reported as
   // ABOVE_BASELINE, not IGNORED/PENDING/MISSING. SQL_BASELINE = a B-prefixed
   // file that ran; BASELINE = a `Skyway.Baseline()` marker.
+  //
+  // Failed baseline rows (Success=false) are excluded — a failed baseline
+  // didn't actually establish state. Treating it as the floor would silently
+  // skip migrations the user still needs to run after Repair() / re-run.
   let highestHistoryBaseline: string | null = null;
   for (const record of applied) {
     if (
       (record.Type === 'BASELINE' || record.Type === 'SQL_BASELINE') &&
       record.Version !== null &&
+      record.Success !== false &&
       (highestHistoryBaseline === null || record.Version > highestHistoryBaseline)
     ) {
       highestHistoryBaseline = record.Version;
