@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { ResolveMigrations } from '../migration/resolver';
+import { ResolveMigrations, DetectDuplicateMigrations } from '../migration/resolver';
 import { ResolvedMigration } from '../migration/types';
 import { HistoryRecord } from '../history/types';
+import { DuplicateVersionError } from '../core/errors';
 
 // ─── Test Helpers ────────────────────────────────────────────────────
 
@@ -1094,5 +1095,106 @@ describe('ResolveMigrations — baseline floor edge cases', () => {
     const r = result.StatusReport.find((s) => s.Description === 'RefreshViews');
     expect(r?.State).toBe('PENDING');
     expect(result.PendingMigrations.map((m) => m.Type)).toContain('repeatable');
+  });
+});
+
+// ─── Duplicate-Version Detection ─────────────────────────────────────
+
+describe('DetectDuplicateMigrations', () => {
+  it('flags two versioned files sharing a version', () => {
+    const discovered = [
+      makeMigration({ Version: '202606021200', Description: 'First', ScriptPath: 'V202606021200__First.sql' }),
+      makeMigration({ Version: '202606021200', Description: 'Second', ScriptPath: 'V202606021200__Second.sql' }),
+    ];
+
+    const groups = DetectDuplicateMigrations(discovered);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].Version).toBe('202606021200');
+    expect(groups[0].Scripts).toEqual(
+      expect.arrayContaining(['V202606021200__First.sql', 'V202606021200__Second.sql'])
+    );
+    expect(groups[0].Scripts).toHaveLength(2);
+  });
+
+  it('flags a baseline and a versioned sharing a version (shared namespace)', () => {
+    const discovered = [
+      makeMigration({ Type: 'versioned', Version: '202606021200', Description: 'V file' }),
+      makeMigration({ Type: 'baseline', Version: '202606021200', Description: 'B file' }),
+    ];
+
+    const groups = DetectDuplicateMigrations(discovered);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].Version).toBe('202606021200');
+    expect(groups[0].Scripts).toHaveLength(2);
+  });
+
+  it('flags two baseline files sharing a version', () => {
+    const discovered = [
+      makeMigration({ Type: 'baseline', Version: '202606021200', Description: 'B one' }),
+      makeMigration({ Type: 'baseline', Version: '202606021200', Description: 'B two' }),
+    ];
+
+    expect(DetectDuplicateMigrations(discovered)).toHaveLength(1);
+  });
+
+  it('treats lowercase v and uppercase V with same version as a collision', () => {
+    // The parser uppercases the prefix and keeps a digits-only Version, so
+    // both resolve to Type=versioned, Version=202606021200.
+    const discovered = [
+      makeMigration({ Version: '202606021200', Filename: 'v202606021200__lower.sql', ScriptPath: 'v202606021200__lower.sql' }),
+      makeMigration({ Version: '202606021200', Filename: 'V202606021200__upper.sql', ScriptPath: 'V202606021200__upper.sql' }),
+    ];
+
+    expect(DetectDuplicateMigrations(discovered)).toHaveLength(1);
+  });
+
+  it('returns empty when all versions are distinct', () => {
+    const discovered = [
+      makeMigration({ Version: '202606021200', Description: 'a' }),
+      makeMigration({ Version: '202606021201', Description: 'b' }),
+      makeMigration({ Type: 'baseline', Version: '202606021202', Description: 'c' }),
+    ];
+
+    expect(DetectDuplicateMigrations(discovered)).toEqual([]);
+  });
+
+  it('ignores repeatable migrations (no version)', () => {
+    const discovered = [
+      makeMigration({ Type: 'repeatable', Version: null, Description: 'Refresh Views' }),
+      makeMigration({ Type: 'repeatable', Version: null, Description: 'Refresh Views' }),
+    ];
+
+    expect(DetectDuplicateMigrations(discovered)).toEqual([]);
+  });
+
+  it('reports each distinct collision as its own group', () => {
+    const discovered = [
+      makeMigration({ Version: '202606021200', Description: 'a1' }),
+      makeMigration({ Version: '202606021200', Description: 'a2' }),
+      makeMigration({ Version: '202606021300', Description: 'b1' }),
+      makeMigration({ Version: '202606021300', Description: 'b2' }),
+      makeMigration({ Version: '202606021400', Description: 'c (unique)' }),
+    ];
+
+    const groups = DetectDuplicateMigrations(discovered);
+    expect(groups).toHaveLength(2);
+    expect(groups.map((g) => g.Version).sort()).toEqual(['202606021200', '202606021300']);
+  });
+});
+
+describe('DuplicateVersionError', () => {
+  it('carries the DUPLICATE_VERSION code and lists the colliding scripts', () => {
+    const err = new DuplicateVersionError([
+      { Version: '202606021200', Scripts: ['V202606021200__First.sql', 'V202606021200__Second.sql'] },
+    ]);
+
+    expect(err).toBeInstanceOf(Error);
+    expect(err.Code).toBe('DUPLICATE_VERSION');
+    expect(err.message).toMatch(/Found more than one migration with version 202606021200/);
+    expect(err.message).toContain('V202606021200__First.sql');
+    expect(err.message).toContain('V202606021200__Second.sql');
+    expect(err.Duplicates).toHaveLength(1);
   });
 });

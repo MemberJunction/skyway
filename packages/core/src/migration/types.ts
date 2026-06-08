@@ -103,3 +103,16 @@ export interface MigrationStatus {
   /** Execution time in milliseconds, if applied */
   ExecutionTime: number | null;
 }
+
+/**
+ * A set of discovered migration files that share the same version.
+ * Versioned (`V`) and baseline (`B`) files share one version namespace,
+ * so a collision can span both types.
+ */
+export interface DuplicateVersionGroup {
+  /** The version shared by every file in the group */
+  Version: string;
+
+  /** Script paths of the colliding files */
+  Scripts: string[];
+}

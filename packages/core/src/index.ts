@@ -80,6 +80,7 @@ export {
   ResolvedMigration,
   MigrationState,
   MigrationStatus,
+  DuplicateVersionGroup,
 } from './migration/types';
 
 // ─── Migration Utilities ─────────────────────────────────────────────
@@ -90,7 +91,7 @@ export {
   ResolveMigration,
   ScanAndResolveMigrations,
 } from './migration/scanner';
-export { ResolveMigrations, ResolverResult } from './migration/resolver';
+export { ResolveMigrations, ResolverResult, DetectDuplicateMigrations } from './migration/resolver';
 
 // ─── Executor Utilities ──────────────────────────────────────────────
 export { SplitOnGO, SQLBatch } from './executor/sql-splitter';
@@ -111,6 +112,7 @@ export {
   MigrationExecutionError,
   MigrationParseError,
   ChecksumMismatchError,
+  DuplicateVersionError,
   TransactionError,
   ConnectionError,
   FailedBatchInfo,

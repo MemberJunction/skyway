@@ -10,7 +10,12 @@
  * - Previously applied migrations are skipped
  */
 
-import { ResolvedMigration, MigrationState, MigrationStatus } from './types';
+import {
+  ResolvedMigration,
+  MigrationState,
+  MigrationStatus,
+  DuplicateVersionGroup,
+} from './types';
 import { HistoryRecord } from '../history/types';
 
 /**
@@ -343,6 +348,39 @@ export function ResolveMigrations(
     BaselineAutoSelected: baselineAutoSelected,
     BaselineFileCount: baselines.length,
   };
+}
+
+/**
+ * Finds versions claimed by more than one discovered migration file.
+ *
+ * Versioned (`V`) and baseline (`B`) files share one version namespace —
+ * both are tracked by version in the history table — so a collision can span
+ * both types. Repeatable migrations have no version and are ignored. Pure:
+ * never throws; callers decide whether to throw or report.
+ *
+ * @param discovered - All migrations found on disk
+ * @returns One group per version that appears two or more times
+ */
+export function DetectDuplicateMigrations(
+  discovered: ResolvedMigration[]
+): DuplicateVersionGroup[] {
+  const scriptsByVersion = new Map<string, string[]>();
+
+  for (const migration of discovered) {
+    if (migration.Type === 'repeatable' || migration.Version === null) continue;
+    const scripts = scriptsByVersion.get(migration.Version) ?? [];
+    scripts.push(migration.ScriptPath);
+    scriptsByVersion.set(migration.Version, scripts);
+  }
+
+  const duplicates: DuplicateVersionGroup[] = [];
+  for (const [version, scripts] of scriptsByVersion) {
+    if (scripts.length > 1) {
+      duplicates.push({ Version: version, Scripts: scripts });
+    }
+  }
+
+  return duplicates;
 }
 
 /**

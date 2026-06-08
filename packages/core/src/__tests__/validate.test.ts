@@ -483,3 +483,63 @@ describe('Skyway.Validate() — edge cases', () => {
     expect(result.Errors).toHaveLength(0);
   });
 });
+
+// ─── Validate() — duplicate versions on disk ─────────────────────────
+
+describe('Skyway.Validate() — duplicate versions', () => {
+  it('flags two versioned files sharing a version', async () => {
+    const provider = new FakeProvider({
+      Server: 'localhost',
+      Database: 'test',
+      User: 'sa',
+      Password: 'x',
+    });
+    writeMigration('V202606021200__First.sql');
+    writeMigration('V202606021200__Second.sql');
+
+    const result = await makeSkyway(provider).Validate();
+    expect(result.Valid).toBe(false);
+    expect(result.Errors.some((e) => /Found more than one migration with version 202606021200/.test(e))).toBe(true);
+    const dupError = result.Errors.find((e) => /Found more than one migration/.test(e))!;
+    expect(dupError).toContain('V202606021200__First.sql');
+    expect(dupError).toContain('V202606021200__Second.sql');
+  });
+
+  it('flags a baseline and a versioned sharing a version', async () => {
+    const provider = new FakeProvider({
+      Server: 'localhost',
+      Database: 'test',
+      User: 'sa',
+      Password: 'x',
+    });
+    writeMigration('V202606021200__A.sql');
+    writeMigration('B202606021200__B.sql');
+
+    const result = await makeSkyway(provider).Validate();
+    expect(result.Valid).toBe(false);
+    expect(result.Errors.some((e) => /Found more than one migration with version 202606021200/.test(e))).toBe(true);
+  });
+
+  it('flags a duplicate even when that version is already applied in history', async () => {
+    const provider = new FakeProvider({
+      Server: 'localhost',
+      Database: 'test',
+      User: 'sa',
+      Password: 'x',
+    });
+    provider.History.records = [
+      makeHistoryRecord({
+        InstalledRank: 1,
+        Version: '202606021200',
+        Type: 'SQL',
+        Description: 'First',
+      }),
+    ];
+    writeMigration('V202606021200__First.sql');
+    writeMigration('V202606021200__Second.sql');
+
+    const result = await makeSkyway(provider).Validate();
+    expect(result.Valid).toBe(false);
+    expect(result.Errors.some((e) => /Found more than one migration with version 202606021200/.test(e))).toBe(true);
+  });
+});

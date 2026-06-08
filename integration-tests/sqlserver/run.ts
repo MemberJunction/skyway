@@ -28,6 +28,7 @@
 
 import { Skyway } from '../../packages/core/src/index';
 import { SqlServerProvider } from '../../packages/sqlserver/src/index';
+import { runDuplicateVersionSmoke } from './duplicate-version-smoke';
 
 const DB_CONFIG = {
   Dialect: 'sqlserver' as const,
@@ -113,6 +114,10 @@ async function main() {
     check(clean.Success, `Clean succeeded${clean.ErrorMessage ? ` (${clean.ErrorMessage})` : ''}`);
     check(clean.ObjectsDropped > 0, `Clean dropped objects (got ${clean.ObjectsDropped})`);
     for (const obj of clean.DroppedObjects) console.log(`      - ${obj}`);
+
+    // Phase 7 — Duplicate-version detection (own temp dir, leaves DB clean)
+    console.log('\n--- 7. Duplicate-version detection ---');
+    failures += await runDuplicateVersionSmoke(DB_CONFIG);
 
     if (failures > 0) {
       console.log(`\n=== FAILED — ${failures} assertion(s) failed ===`);
