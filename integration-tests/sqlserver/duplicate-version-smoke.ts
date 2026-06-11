@@ -85,16 +85,18 @@ export async function runDuplicateVersionSmoke(dbConfig: SqlServerConfig): Promi
       }
     }
 
-    // ─── 3. History must hold zero rows for the duplicate version ──
-    console.log('\n  Verify history has no rows for the duplicate version');
+    // ─── 3. The fresh DB must be untouched — nothing created ───────
+    // The guard runs before EnsureExists, so on a freshly-cleaned database
+    // the duplicate-failing Migrate must not even create the history table.
+    console.log('\n  Verify the duplicate-failing Migrate created nothing');
     {
       const provider = new SqlServerProvider(dbConfig);
       try {
         await provider.Connect();
-        const rows = await provider.Query<{ n: number }>(
-          `SELECT COUNT(*) AS n FROM dbo.flyway_schema_history WHERE version = '${DUP_VERSION}'`
+        const rows = await provider.Query<{ missing: number }>(
+          `SELECT CASE WHEN OBJECT_ID('dbo.flyway_schema_history') IS NULL THEN 1 ELSE 0 END AS missing`
         );
-        check((rows[0]?.n ?? -1) === 0, `0 history rows for version ${DUP_VERSION} (got ${rows[0]?.n})`);
+        check(rows[0]?.missing === 1, 'History table was not created (nothing reached the DB)');
       } finally {
         await provider.Disconnect();
       }
