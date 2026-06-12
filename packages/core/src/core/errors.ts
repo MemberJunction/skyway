@@ -3,6 +3,8 @@
  * Custom error types for Skyway migration operations.
  */
 
+import type { DuplicateVersionGroup } from '../migration/types';
+
 /**
  * Base error class for all Skyway errors.
  * Provides a consistent error hierarchy with error codes for programmatic handling.
@@ -120,6 +122,31 @@ export class ChecksumMismatchError extends SkywayError {
     this.Version = version;
     this.ExpectedChecksum = expected;
     this.ActualChecksum = actual;
+  }
+}
+
+/**
+ * Thrown when two or more migration files on disk share the same version.
+ * Applying both would write duplicate history rows, so resolution cannot
+ * proceed. Mirrors Flyway's "Found more than one migration with version X".
+ */
+export class DuplicateVersionError extends SkywayError {
+  /** Every version collision detected (usually one). */
+  readonly Duplicates: DuplicateVersionGroup[];
+
+  constructor(duplicates: DuplicateVersionGroup[]) {
+    super('DUPLICATE_VERSION', DuplicateVersionError.buildMessage(duplicates));
+    this.name = 'DuplicateVersionError';
+    this.Duplicates = duplicates;
+  }
+
+  private static buildMessage(duplicates: DuplicateVersionGroup[]): string {
+    return duplicates
+      .map(
+        (group) =>
+          `Found more than one migration with version ${group.Version}: ${group.Scripts.join(', ')}`
+      )
+      .join('; ');
   }
 }
 

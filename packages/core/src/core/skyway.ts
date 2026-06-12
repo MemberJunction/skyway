@@ -33,9 +33,10 @@ import { SkywayConfig, ResolvedSkywayConfig, resolveConfig } from './config';
 import { DatabaseProvider, ProviderTransaction, HistoryInsertParams } from '../db/provider';
 import { HistoryRecord } from '../history/types';
 import { ScanAndResolveMigrations } from '../migration/scanner';
-import { ResolveMigrations, ResolverResult } from '../migration/resolver';
+import { ResolveMigrations, ResolverResult, DetectDuplicateMigrations } from '../migration/resolver';
 import { ResolvedMigration, MigrationStatus } from '../migration/types';
 import { SubstitutePlaceholders, PlaceholderContext } from '../executor/placeholder';
+import { DuplicateVersionError } from './errors';
 
 /**
  * Result of a `Migrate()` operation.
@@ -226,6 +227,17 @@ export class Skyway {
       const schema = this.config.Migrations.DefaultSchema;
       const historyTable = this.config.Migrations.HistoryTable;
 
+      // Scan migrations and reject duplicate versions BEFORE any DB mutation.
+      // Detection is DB-independent, so an invalid migration set must not
+      // create the schema, history table, or schema marker on a fresh database.
+      this.callbacks.OnLog?.('Scanning migration files...');
+      const discovered = await ScanAndResolveMigrations(
+        this.config.Migrations.Locations,
+        (warning) => this.callbacks.OnLog?.(`Warning: ${warning}`)
+      );
+      this.callbacks.OnLog?.(`Found ${discovered.length} migration file(s)`);
+      this.assertNoDuplicateVersions(discovered);
+
       // Ensure schema and history table exist
       await this.provider.History.EnsureExists(schema, historyTable);
 
@@ -235,14 +247,6 @@ export class Skyway {
         await this.insertSchemaMarker(schema, historyTable);
         this.callbacks.OnLog?.(`Created schema [${schema}]`);
       }
-
-      // Scan and resolve migrations
-      this.callbacks.OnLog?.('Scanning migration files...');
-      const discovered = await ScanAndResolveMigrations(
-        this.config.Migrations.Locations,
-        (warning) => this.callbacks.OnLog?.(`Warning: ${warning}`)
-      );
-      this.callbacks.OnLog?.(`Found ${discovered.length} migration file(s)`);
 
       // Re-read history (may have changed after schema creation)
       const currentHistory = await this.provider.History.GetAllRecords(schema, historyTable);
@@ -353,6 +357,9 @@ export class Skyway {
       this.config.Migrations.Locations
     );
 
+    // Duplicate versions make the status report ambiguous — fail fast.
+    this.assertNoDuplicateVersions(discovered);
+
     let applied: HistoryRecord[] = [];
     if (await this.provider.History.Exists(schema, historyTable)) {
       applied = await this.provider.History.GetAllRecords(schema, historyTable);
@@ -380,14 +387,22 @@ export class Skyway {
     const historyTable = this.config.Migrations.HistoryTable;
     const errors: string[] = [];
 
-    if (!(await this.provider.History.Exists(schema, historyTable))) {
-      return { Valid: true, Errors: [] };
-    }
-
-    const applied = await this.provider.History.GetAllRecords(schema, historyTable);
+    // Duplicate versions on disk are a problem regardless of DB state, so
+    // check before the no-history-table short-circuit below.
     const discovered = await ScanAndResolveMigrations(
       this.config.Migrations.Locations
     );
+    for (const dup of DetectDuplicateMigrations(discovered)) {
+      errors.push(
+        `Found more than one migration with version ${dup.Version}: ${dup.Scripts.join(', ')}`
+      );
+    }
+
+    if (!(await this.provider.History.Exists(schema, historyTable))) {
+      return { Valid: errors.length === 0, Errors: errors };
+    }
+
+    const applied = await this.provider.History.GetAllRecords(schema, historyTable);
 
     // Build lookup by version
     const diskByVersion = new Map<string, ResolvedMigration>();
@@ -617,6 +632,14 @@ export class Skyway {
         };
       }
 
+      // Reject duplicate versions before mutating anything. A collision makes
+      // the disk-by-version mapping below ambiguous (last writer in readdir
+      // order wins), so refuse rather than realign to an arbitrary file.
+      const discovered = await ScanAndResolveMigrations(
+        this.config.Migrations.Locations
+      );
+      this.assertNoDuplicateVersions(discovered);
+
       const records = await this.provider.History.GetAllRecords(schema, historyTable);
 
       // 1. Remove failed entries
@@ -631,10 +654,7 @@ export class Skyway {
         }
       }
 
-      // 2. Realign checksums
-      const discovered = await ScanAndResolveMigrations(
-        this.config.Migrations.Locations
-      );
+      // 2. Realign checksums (reuses the scan from the duplicate check above)
       const diskByVersion = new Map<string, ResolvedMigration>();
       for (const m of discovered) {
         if (m.Version) {
@@ -688,6 +708,17 @@ export class Skyway {
   }
 
   // ─── Private Methods ──────────────────────────────────────────────
+
+  /**
+   * Throws DuplicateVersionError if two discovered files share a version.
+   * Run before resolution so duplicates never reach execution.
+   */
+  private assertNoDuplicateVersions(discovered: ResolvedMigration[]): void {
+    const duplicates = DetectDuplicateMigrations(discovered);
+    if (duplicates.length > 0) {
+      throw new DuplicateVersionError(duplicates);
+    }
+  }
 
   /**
    * Inserts the schema creation marker (installed_rank 0).
