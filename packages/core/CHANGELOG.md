@@ -1,5 +1,11 @@
 # @memberjunction/skyway-core
 
+## 0.6.2
+
+### Patch Changes
+
+- 108cfb6: Detect duplicate migration versions and fail before applying, instead of silently writing two history rows for the same version. Migrate, Info, and Validate now reject version collisions before any database mutation, and Repair refuses to operate when a version is duplicated.
+
 ## 0.6.1
 
 ### Patch Changes

@@ -1,6 +1,6 @@
 {
   "name": "@memberjunction/skyway-sqlserver",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "SQL Server provider for the Skyway migration engine",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -31,7 +31,7 @@
     "directory": "packages/sqlserver"
   },
   "dependencies": {
-    "@memberjunction/skyway-core": "^0.6.1",
+    "@memberjunction/skyway-core": "^0.6.2",
     "mssql": "^11.0.1"
   },
   "devDependencies": {
