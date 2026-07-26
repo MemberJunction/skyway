@@ -28,6 +28,7 @@
  * await skyway.Close();
  * ```
  */
+import { DescribeDriverError } from '../executor/driver-error';
 
 import { SkywayConfig, ResolvedSkywayConfig, resolveConfig } from './config';
 import { DatabaseProvider, ProviderTransaction, HistoryInsertParams } from '../db/provider';
@@ -927,7 +928,10 @@ export class Skyway {
             await txn.Execute(batch.SQL);
           } catch (batchErr) {
             const elapsedMS = Date.now() - startTime;
-            const errorMessage = batchErr instanceof Error ? batchErr.message : String(batchErr);
+            // NOT `batchErr.message` — that drops the procedure/line the driver reported, and drops
+            // the preceding errors entirely, which is precisely what a "See previous errors"
+            // summary is pointing at. See executor/driver-error.
+            const errorMessage = DescribeDriverError(batchErr);
 
             // Extract identifiers from error and find related lines.
             // Identifier patterns are tuned for SQL Server messages but degrade
