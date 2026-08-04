@@ -16,10 +16,14 @@ export type HistoryRecordType = 'SCHEMA' | 'SQL' | 'SQL_BASELINE' | 'BASELINE';
 /**
  * Definition of a user-defined extra column on the history table.
  *
- * Skyway creates the column during `EnsureExists` and, when `Value` is
- * supplied, writes it into every history row inserted during the run.
- * Columns without a `Value` must be nullable or carry a `DefaultValue` so
- * inserts don't fail.
+ * Skyway creates the column during `EnsureExists` — on a new history table via
+ * `CREATE TABLE`, and on an existing one via `ALTER TABLE ... ADD` — and, when
+ * `Value` is supplied, writes it into every history row inserted during the run.
+ * Columns without a `Value` must be nullable or carry a `DefaultValue`;
+ * `EnsureExists` rejects a configuration that violates this before running any
+ * DDL. Retrofitting a `NOT NULL` column onto a history table that already has
+ * rows additionally requires a `DefaultValue`, since SQL Server cannot add one
+ * without it.
  *
  * Example — stamp each history row with the `CompanyIntegrationID` that
  * triggered the run:

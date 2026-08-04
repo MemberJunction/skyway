@@ -68,6 +68,7 @@ export class HistoryTable {
    * @param connectionSource - Transaction or pool to execute against
    */
   async EnsureExists(connectionSource?: sql.Transaction): Promise<void> {
+    this.assertExtraColumnsStampable();
     const request = this.createRequest(connectionSource);
 
     // Create schema if it doesn't exist
@@ -105,6 +106,81 @@ export class HistoryTable {
           ON ${this.QualifiedName} ([success]);
       END
     `);
+
+    await this.reconcileExtraColumns(connectionSource);
+  }
+
+  /**
+   * Enforces the documented contract that an extra column without a `Value`
+   * must be nullable or carry a `DefaultValue`. Otherwise the first insert
+   * dies with a bare `Cannot insert the value NULL` and no migrations apply.
+   */
+  private assertExtraColumnsStampable(): void {
+    for (const col of this.extraColumns) {
+      if (col.Value === undefined && col.IsNullable === false && !col.DefaultValue) {
+        throw new Error(
+          `HistoryExtraColumns: column '${col.Name}' is NOT NULL but has no Value and no ` +
+            `DefaultValue, so every history-row insert would fail. Supply a Value, ` +
+            `set a DefaultValue, or declare it nullable (IsNullable: true).`
+        );
+      }
+    }
+  }
+
+  /**
+   * Adds any configured extra column that is missing from an already-existing
+   * history table. Without this, enabling `HistoryExtraColumns` against a
+   * database that Skyway has already migrated leaves the columns absent while
+   * every `Insert*` references them — the run fails with a raw
+   * `Invalid column name` and applies zero migrations.
+   */
+  private async reconcileExtraColumns(connectionSource?: sql.Transaction): Promise<void> {
+    if (this.extraColumns.length === 0) return;
+
+    const existing = await this.existingColumnNames(connectionSource);
+    const missing = this.extraColumns.filter(c => !existing.has(c.Name.toLowerCase()));
+    if (missing.length === 0) return;
+
+    const hasRows = await this.hasAnyRows(connectionSource);
+    for (const col of missing) {
+      this.assertAddable(col, hasRows);
+      await this.createRequest(connectionSource).batch(
+        `ALTER TABLE ${this.QualifiedName} ADD ${this.extraColumnDDL(col)}`
+      );
+    }
+  }
+
+  /** Lower-cased column names currently on the history table. */
+  private async existingColumnNames(connectionSource?: sql.Transaction): Promise<Set<string>> {
+    const request = this.createRequest(connectionSource);
+    request.input('schemaName', sql.NVarChar(128), this.schema);
+    request.input('tableName', sql.NVarChar(128), this.tableName);
+    const result = await request.query<{ COLUMN_NAME: string }>(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = @schemaName AND TABLE_NAME = @tableName
+    `);
+    return new Set(result.recordset.map(r => r.COLUMN_NAME.toLowerCase()));
+  }
+
+  private async hasAnyRows(connectionSource?: sql.Transaction): Promise<boolean> {
+    const result = await this.createRequest(connectionSource).query<{ n: number }>(
+      `SELECT TOP 1 1 AS n FROM ${this.QualifiedName}`
+    );
+    return result.recordset.length > 0;
+  }
+
+  /**
+   * SQL Server cannot add a NOT NULL column to a populated table without a
+   * DEFAULT. Fail with an actionable message instead of a raw engine error.
+   */
+  private assertAddable(col: HistoryExtraColumn, tableHasRows: boolean): void {
+    if (col.IsNullable === false && !col.DefaultValue && tableHasRows) {
+      throw new Error(
+        `HistoryExtraColumns: cannot add NOT NULL column '${col.Name}' to the existing ` +
+          `history table ${this.QualifiedName} because it already contains rows. ` +
+          `Give the column a DefaultValue, or declare it nullable (IsNullable: true).`
+      );
+    }
   }
 
   // ─── Extra-column helpers ─────────────────────────────────────────────

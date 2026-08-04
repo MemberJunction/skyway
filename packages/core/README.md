@@ -118,9 +118,16 @@ const integrationSkyway = new Skyway({
 
 Rules:
 - Extras are **appended** to the Flyway columns; the core ten are never replaced.
-- Extras without a `Value` must be nullable or carry a `DefaultValue`.
+- Extras without a `Value` must be nullable or carry a `DefaultValue`. Skyway checks this
+  before touching the database and fails with a message naming the offending column.
 - `Value` is always bound as a SQL parameter — safe against injection regardless of source.
-- Changes to `HistoryExtraColumns` only take effect on a table Skyway creates. Pre-existing history tables are not altered; either drop the table or add the columns manually.
+- Extras are reconciled onto an **existing** history table too: `EnsureExists` adds any
+  configured column that is missing, so you can turn `HistoryExtraColumns` on for a database
+  Skyway has already migrated. Rows written before the column existed keep its `DefaultValue`
+  (or NULL); rows written after are stamped.
+- SQL Server cannot add a `NOT NULL` column to a table that already has rows. Retrofitting a
+  `NOT NULL` extra onto a populated history table therefore requires a `DefaultValue`; without
+  one, Skyway fails with an actionable message instead of a bare engine error.
 
 ### Progress Callbacks
 
