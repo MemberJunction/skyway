@@ -113,4 +113,4 @@ Environment variables in `${...}` syntax are expanded. A `.env` file is also loa
 
 ## License
 
-MIT
+Skyway is part of MemberJunction, licensed under the [Business Source License 1.1](../../LICENSE) — full source on GitHub, free and unrestricted for nonprofits, forever.
