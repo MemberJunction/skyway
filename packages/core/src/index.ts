@@ -103,6 +103,12 @@ export {
   ContextLine,
 } from './executor/error-context';
 
+export {
+  ExtractDriverErrorDetail,
+  DescribeDriverError,
+  type DriverErrorDetail,
+} from './executor/driver-error';
+
 // ─── History Types ───────────────────────────────────────────────────
 export { HistoryRecord, HistoryRecordType } from './history/types';
 
