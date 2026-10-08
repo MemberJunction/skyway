@@ -207,6 +207,7 @@ Skyway aims for compatibility with Flyway's behavior and artifacts:
 | Placeholder substitution (`${...}`) | Supported (smart — only known placeholders) |
 | GO batch separator handling | Supported |
 | Transaction wrapping | Supported (per-migration or per-run) |
+| Script config files (`<file>.sql.conf`, `executeInTransaction=false`) | Supported (`executeInTransaction` only) |
 | Out-of-order migrations | Configurable |
 | `clean` command | Supported |
 | `baseline` command | Supported |
@@ -333,6 +334,56 @@ const skyway = new Skyway({
     TransactionMode: 'per-run', // all-or-nothing (default)
 });
 ```
+
+### Migrations That Cannot Run in a Transaction
+
+> **Use this only when the database refuses to run a statement inside a transaction.** It is not a general option for speed or convenience: a non-transactional migration gives up Skyway's rollback guarantees. If a statement *can* run in a transaction, leave it in one.
+
+**When it is allowed.** The statement itself must fail inside a transaction, for example:
+
+- PostgreSQL `CREATE INDEX CONCURRENTLY` / `DROP INDEX CONCURRENTLY` / `REINDEX ... CONCURRENTLY` (build or drop an index without locking writes on a live database)
+- PostgreSQL `ALTER TYPE ... ADD VALUE` on versions that reject it in a transaction block, `VACUUM`, `CREATE DATABASE`
+
+Put only those statements in the migration, nothing else, and mark it with a Flyway-style script config file next to it, named `<migration file>.conf`:
+
+```
+migrations/
+  V202610081500__add_indexes.sql
+  V202610081500__add_indexes.sql.conf    ← contains: executeInTransaction=false
+```
+
+Other keys in the `.conf` file are ignored, so files written for Flyway load unchanged.
+
+**What Skyway does with it:**
+
+- **`per-migration`:** the migration runs on its own, without a transaction.
+- **`per-run`:** the migrations *before* it are committed first, it runs on its own, and the rest continue in a new transaction. **`per-run` is therefore no longer all-or-nothing for the whole run**: each non-transactional migration splits the run into separately committed parts. If something after it fails, only the part after it rolls back; everything before it, and the migration itself, stay applied.
+- **PostgreSQL:** the script is sent one statement at a time, because PostgreSQL runs a multi-statement query string as a single implicit transaction. Statements are split on top-level `;`, respecting quotes, `$$` bodies and comments.
+
+**What you lose.** Nothing in a non-transactional migration can be rolled back. If statement 3 of 5 fails, statements 1 and 2 stay applied, statement 3 may have left something behind, and 4 and 5 never ran. The migration is **not** recorded in the history table, so the next `migrate` runs the **whole script again**, from statement 1.
+
+**Write it so that re-running is safe:**
+
+- One statement per concern, and as few statements as possible (ideally one).
+- Make every statement idempotent, e.g. `CREATE INDEX CONCURRENTLY IF NOT EXISTS`, `DROP INDEX CONCURRENTLY IF EXISTS`.
+- Don't mix in data changes or ordinary DDL; put those in a normal (transactional) migration.
+
+**Recovering from a failed non-transactional migration:**
+
+1. Read the error, and check what the statements that ran before the failure changed.
+2. Fix the cause (lock timeout, duplicate values for a unique index, disk space, …).
+3. **PostgreSQL: drop invalid indexes first.** A failed or cancelled `CREATE INDEX CONCURRENTLY` leaves an **invalid** index behind. It is not used by queries but is still maintained on every write, and `CREATE INDEX CONCURRENTLY IF NOT EXISTS` will **skip** it on the retry because the name exists. Find and drop them before re-running:
+
+   ```sql
+   SELECT n.nspname AS schema, c.relname AS index
+   FROM pg_index i
+   JOIN pg_class c ON c.oid = i.indexrelid
+   JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE NOT i.indisvalid;
+
+   DROP INDEX CONCURRENTLY IF EXISTS "schema"."index_name";
+   ```
+4. Run `migrate` again. The failed migration runs from the start; because it was never recorded in history, no `repair` is needed. In `per-run` mode, migrations committed before it are already in history and are not re-run.
 
 ### Smart Placeholder Handling
 

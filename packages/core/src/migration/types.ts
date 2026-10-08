@@ -56,6 +56,13 @@ export interface ResolvedMigration extends MigrationInfo {
    * for compatibility with existing history tables.
    */
   Checksum: number;
+
+  /**
+   * Whether the migration runs inside a transaction. True unless the migration's
+   * Flyway-style script config file (`<file>.sql.conf`) sets `executeInTransaction=false`,
+   * which statements such as PostgreSQL `CREATE INDEX CONCURRENTLY` require.
+   */
+  ExecuteInTransaction: boolean;
 }
 
 /**

@@ -86,6 +86,7 @@ export {
 // ─── Migration Utilities ─────────────────────────────────────────────
 export { ParseMigrationFilename } from './migration/parser';
 export { ComputeChecksum } from './migration/checksum';
+export { ParseScriptConfig, LoadScriptConfig, ScriptConfig, SCRIPT_CONFIG_SUFFIX } from './migration/script-config';
 export {
   ScanMigrations,
   ResolveMigration,

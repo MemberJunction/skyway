@@ -21,6 +21,7 @@ function makeMigration(overrides: Partial<ResolvedMigration> = {}): ResolvedMigr
     ScriptPath: overrides.ScriptPath ?? filename,
     SQL: overrides.SQL ?? 'SELECT 1',
     Checksum: overrides.Checksum ?? 12345,
+    ExecuteInTransaction: overrides.ExecuteInTransaction ?? true,
   };
 }
 

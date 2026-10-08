@@ -125,6 +125,14 @@ export interface DatabaseProvider {
    */
   SplitScript(script: string): SQLBatch[];
 
+  /**
+   * Optional. Splits a script into individual statements, for migrations that run outside a
+   * transaction (`executeInTransaction=false`). Needed where a multi-statement batch is itself
+   * run as one implicit transaction: PostgreSQL does this, so `CREATE INDEX CONCURRENTLY` must
+   * be sent on its own. When absent, {@link SplitScript} is used.
+   */
+  SplitStatements?(script: string): SQLBatch[];
+
   // ─── History Table Management ──────────────────────────────────────
 
   /**
