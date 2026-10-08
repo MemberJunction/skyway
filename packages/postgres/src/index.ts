@@ -31,4 +31,3 @@
  */
 
 export { PostgresProvider } from './postgres-provider';
-export { SplitPostgresStatements } from './statement-splitter';

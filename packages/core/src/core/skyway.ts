@@ -749,82 +749,13 @@ export class Skyway {
   private async executeMigrationsWithHistory(
     resolution: ResolverResult
   ): Promise<MigrationExecutionResult[]> {
-    const results: MigrationExecutionResult[] = [];
-    const runs = this.splitByTransactionRequirement(resolution.PendingMigrations);
-    if (this.config.TransactionMode === 'per-run' && runs.length > 1) {
-      this.callbacks.OnLog?.(
-        'Some migrations are marked executeInTransaction=false; they run outside a transaction, ' +
-        'and the migrations before each of them are committed first (per-run is all-or-nothing only between them).'
-      );
-    }
+    const migrations = resolution.PendingMigrations;
 
-    for (const run of runs) {
-      const runResults = run.Transactional
-        ? await this.executeTransactionalRun(run.Migrations)
-        : [await this.executeNonTransactionalWithHistory(run.Migrations[0])];
-      results.push(...runResults);
-      const last = runResults[runResults.length - 1];
-      if (!last || !last.Success || runResults.length < run.Migrations.length) {
-        break; // a failure stops the migration run, as before
-      }
-    }
-    return results;
-  }
-
-  private async executeTransactionalRun(migrations: ResolvedMigration[]): Promise<MigrationExecutionResult[]> {
-    return this.config.TransactionMode === 'per-run'
-      ? this.executePerRunWithHistory(migrations)
-      : this.executePerMigrationWithHistory(migrations);
-  }
-
-  /**
-   * Groups consecutive transactional migrations together; each migration marked
-   * executeInTransaction=false becomes a run of its own. Order is preserved.
-   */
-  private splitByTransactionRequirement(
-    migrations: ResolvedMigration[]
-  ): { Transactional: boolean; Migrations: ResolvedMigration[] }[] {
-    const runs: { Transactional: boolean; Migrations: ResolvedMigration[] }[] = [];
-    for (const migration of migrations) {
-      const last = runs[runs.length - 1];
-      if (migration.ExecuteInTransaction && last?.Transactional) {
-        last.Migrations.push(migration);
-      } else {
-        runs.push({ Transactional: migration.ExecuteInTransaction, Migrations: [migration] });
-      }
-    }
-    return runs;
-  }
-
-  /**
-   * Runs one executeInTransaction=false migration directly on the provider and records it.
-   * A failure cannot be rolled back: statements that succeeded before it remain applied.
-   */
-  private async executeNonTransactionalWithHistory(migration: ResolvedMigration): Promise<MigrationExecutionResult> {
-    const schema = this.config.Migrations.DefaultSchema;
-    const historyTable = this.config.Migrations.HistoryTable;
-    this.callbacks.OnMigrationStart?.(migration);
-    this.callbacks.OnLog?.(`  ${migration.Filename} runs outside a transaction (executeInTransaction=false)`);
-
-    const result = await this.executeSingleMigration(this.provider, migration);
-    if (result.Success) {
-      const nextRank = await this.provider.History.GetNextRank(schema, historyTable);
-      await this.provider.History.InsertRecord(
-        schema,
-        historyTable,
-        this.buildHistoryRecord(migration, nextRank, result.ExecutionTimeMS)
-      );
-      this.callbacks.OnLog?.(
-        `Migrated to version ${migration.Version ?? '(repeatable)'}: ${migration.Description} (${result.ExecutionTimeMS}ms)`
-      );
+    if (this.config.TransactionMode === 'per-run') {
+      return this.executePerRunWithHistory(migrations);
     } else {
-      this.callbacks.OnLog?.(
-        `Migration FAILED outside a transaction: ${migration.Version ?? migration.Description} — ` +
-        'statements that ran before the failure were not rolled back'
-      );
+      return this.executePerMigrationWithHistory(migrations);
     }
-    this.callbacks.OnMigrationEnd?.(result);
-    return result;
   }
 
   /**
@@ -944,11 +875,10 @@ export class Skyway {
   }
 
   /**
-   * Executes a single migration file, either within a transaction or, for an
-   * executeInTransaction=false migration, directly on the provider.
+   * Executes a single migration file within an existing transaction.
    */
   private async executeSingleMigration(
-    txn: Pick<ProviderTransaction, 'Execute'>,
+    txn: ProviderTransaction,
     migration: ResolvedMigration
   ): Promise<MigrationExecutionResult> {
     const { ComputeChecksum } = await import('../migration/checksum');
@@ -979,11 +909,7 @@ export class Skyway {
       }
 
       // Split into batches using the provider's dialect-specific splitter
-      // Outside a transaction, send statements one at a time where the dialect needs it
-      // (PostgreSQL runs a multi-statement batch as one implicit transaction).
-      const batches = !migration.ExecuteInTransaction && this.provider.SplitStatements
-        ? this.provider.SplitStatements(processedSQL)
-        : this.provider.SplitScript(processedSQL);
+      const batches = this.provider.SplitScript(processedSQL);
 
       this.callbacks.OnLog?.(
         `  Executing ${migration.Filename}: ${batches.length} batch(es)`
