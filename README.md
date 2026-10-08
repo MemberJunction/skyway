@@ -207,6 +207,7 @@ Skyway aims for compatibility with Flyway's behavior and artifacts:
 | Placeholder substitution (`${...}`) | Supported (smart — only known placeholders) |
 | GO batch separator handling | Supported |
 | Transaction wrapping | Supported (per-migration or per-run) |
+| Script config files (`<file>.sql.conf`, `executeInTransaction=false`) | Supported (`executeInTransaction` only) |
 | Out-of-order migrations | Configurable |
 | `clean` command | Supported |
 | `baseline` command | Supported |
@@ -333,6 +334,24 @@ const skyway = new Skyway({
     TransactionMode: 'per-run', // all-or-nothing (default)
 });
 ```
+
+### Migrations That Cannot Run in a Transaction
+
+Some statements refuse to run inside a transaction, most commonly PostgreSQL's `CREATE INDEX CONCURRENTLY` (which builds an index without locking writes on a live database). Mark such a migration with a Flyway-style script config file next to it, named `<migration file>.conf`:
+
+```
+migrations/
+  V202610081500__add_indexes.sql
+  V202610081500__add_indexes.sql.conf    ← contains: executeInTransaction=false
+```
+
+Skyway then runs that migration **outside a transaction**, in either transaction mode:
+
+- **`per-migration`:** the migration runs on its own, without a transaction.
+- **`per-run`:** the migrations before it are committed first, it runs on its own, and the rest continue in a new transaction. A run is therefore all-or-nothing only between non-transactional migrations.
+- **PostgreSQL:** the script is sent one statement at a time, because PostgreSQL runs a multi-statement query string as a single implicit transaction. Statements are split on top-level `;`, respecting quotes, `$$` bodies and comments.
+
+A failure in a non-transactional migration cannot be rolled back: statements that ran before the failing one stay applied, and the migration is not recorded in the history table. Keep such migrations small, and make each statement safe to re-run (for example `CREATE INDEX CONCURRENTLY IF NOT EXISTS`). Other keys in the `.conf` file are ignored, so files written for Flyway load unchanged.
 
 ### Smart Placeholder Handling
 

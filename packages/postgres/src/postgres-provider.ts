@@ -20,6 +20,7 @@ import { DatabaseConfig } from '@memberjunction/skyway-core';
 import { HistoryRecord } from '@memberjunction/skyway-core';
 import { SQLBatch } from '@memberjunction/skyway-core';
 import { validateSqlIdentifier } from '@memberjunction/skyway-core';
+import { SplitPostgresStatements } from './statement-splitter';
 
 /**
  * PostgreSQL provider for Skyway.
@@ -181,6 +182,15 @@ export class PostgresProvider implements DatabaseProvider {
       StartLine: 1,
       EndLine: lineCount,
     }];
+  }
+
+  /**
+   * Splits a script into single statements for migrations that run outside a transaction.
+   * PostgreSQL runs a multi-statement query string as one implicit transaction, which
+   * `CREATE INDEX CONCURRENTLY` (and similar statements) reject.
+   */
+  SplitStatements(script: string): SQLBatch[] {
+    return SplitPostgresStatements(script);
   }
 
   // ─── History Table ─────────────────────────────────────────────────

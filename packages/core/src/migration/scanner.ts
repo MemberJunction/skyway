@@ -15,6 +15,7 @@ import fg from 'fast-glob';
 import { MigrationInfo, ResolvedMigration } from './types';
 import { ParseMigrationFilename } from './parser';
 import { ComputeChecksum } from './checksum';
+import { LoadScriptConfig } from './script-config';
 
 /**
  * Callback for reporting non-fatal scan issues (e.g., unparseable filenames).
@@ -86,11 +87,13 @@ export async function ResolveMigration(
 ): Promise<ResolvedMigration> {
   const content = await fs.promises.readFile(info.FilePath, 'utf-8');
   const checksum = ComputeChecksum(content);
+  const scriptConfig = await LoadScriptConfig(info.FilePath);
 
   return {
     ...info,
     SQL: content,
     Checksum: checksum,
+    ExecuteInTransaction: scriptConfig.ExecuteInTransaction ?? true,
   };
 }
 
