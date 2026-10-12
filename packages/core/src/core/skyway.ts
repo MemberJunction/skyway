@@ -924,10 +924,19 @@ export class Skyway {
           this.callbacks.OnMigrationEnd?.(result);
         } else {
           this.callbacks.OnMigrationEnd?.(result);
-          await txn.Rollback();
-          this.callbacks.OnLog?.(
-            `Migration rolled back: ${migration.Version ?? migration.Description}`
-          );
+          // A batch that failed can take its transaction down with it — a request timeout or
+          // a severe error makes the server abort it, and rolling back an aborted transaction
+          // throws ("Transaction has been aborted"). Letting that escape would replace the
+          // batch's real error, which is already in `result`, with one that says nothing.
+          // Same guard as per-run mode.
+          try {
+            await txn.Rollback();
+            this.callbacks.OnLog?.(
+              `Migration rolled back: ${migration.Version ?? migration.Description}`
+            );
+          } catch (rollbackErr) {
+            this.callbacks.OnLog?.(`Warning: rollback error: ${rollbackErr}`);
+          }
           return results;
         }
       } catch (err) {
