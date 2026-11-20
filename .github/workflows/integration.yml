@@ -4,9 +4,13 @@ on:
   pull_request:
     branches:
       - main
+      - next
+      - 'lts/**'
   push:
     branches:
       - main
+      - next
+      - 'lts/**'
   workflow_dispatch:
 
 permissions:
