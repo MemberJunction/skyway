@@ -189,9 +189,14 @@ describe('SqlServerProvider.BeginTransaction LockTimeout', () => {
     expect(batch).not.toHaveBeenCalled();
   });
 
-  it.each([-1, 1.5, '2000; DROP TABLE x'])('throws on invalid LockTimeout %s before touching the pool', async (value) => {
-    const provider = providerWith(value);
+  it.each([0, -1, 1.5, '2000; DROP TABLE x'])('rejects invalid LockTimeout %s when the provider is created', (value) => {
+    expect(() => providerWith(value)).toThrow(/LockTimeout must be an integer from 1/);
+  });
+
+  it('re-checks LockTimeout in BeginTransaction if the config changed after construction', async () => {
+    const provider = providerWith(2000);
     const { getPool, batch } = stubDriver(provider);
+    provider.Config.Options = { LockTimeout: -1 };
     await expect(provider.BeginTransaction()).rejects.toThrow(/LockTimeout must be an integer/);
     expect(getPool).not.toHaveBeenCalled();
     expect(batch).not.toHaveBeenCalled();
@@ -203,5 +208,17 @@ describe('SqlServerProvider.BeginTransaction LockTimeout', () => {
     batch.mockRejectedValue(new Error('boom'));
     await expect(provider.BeginTransaction()).rejects.toThrow('boom');
     expect(rollback).toHaveBeenCalledTimes(1);
+  });
+
+  it('throws an AggregateError with both errors when the SET and the rollback fail', async () => {
+    const provider = providerWith(2000);
+    const { batch, rollback } = stubDriver(provider);
+    const setErr = new Error('set failed');
+    const rollbackErr = new Error('rollback failed');
+    batch.mockRejectedValue(setErr);
+    rollback.mockRejectedValue(rollbackErr);
+    const caught = await provider.BeginTransaction().catch((err: unknown) => err);
+    expect(caught).toBeInstanceOf(AggregateError);
+    expect((caught as AggregateError).errors).toEqual([setErr, rollbackErr]);
   });
 });

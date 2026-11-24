@@ -35,6 +35,8 @@ export class PostgresProvider implements DatabaseProvider {
   private readonly historyProvider: PostgresHistoryProvider;
 
   constructor(config: DatabaseConfig) {
+    // Fail at startup, not on the first deploy that has a transactional migration.
+    if (config.Options?.LockTimeout !== undefined) validateLockTimeout(config.Options.LockTimeout);
     this.config = config;
     this.historyProvider = new PostgresHistoryProvider(this);
   }
@@ -389,6 +391,8 @@ export class PostgresProvider implements DatabaseProvider {
  * Runs `SET LOCAL lock_timeout` on a just-begun transaction. `SET LOCAL`
  * scopes it to this transaction, so the pooled connection goes back clean.
  * If the SET fails, the transaction is rolled back and the client released.
+ * If the rollback fails too, the client is released with `true`, which makes
+ * pg-pool destroy it instead of handing a broken connection to the next caller.
  *
  * @param ms Already-validated lock timeout in milliseconds.
  */
@@ -396,12 +400,17 @@ async function applyLockTimeout(client: PoolClient, ms: number): Promise<void> {
   try {
     await client.query(`SET LOCAL lock_timeout = '${ms}ms'`);
   } catch (setErr) {
+    let rollbackFailed = false;
+    let rollbackErr: unknown;
     try {
       await client.query('ROLLBACK');
-    } catch (rollbackErr) {
+    } catch (err) {
+      rollbackFailed = true;
+      rollbackErr = err;
+    }
+    client.release(rollbackFailed);
+    if (rollbackFailed) {
       throw new AggregateError([setErr, rollbackErr], 'SET LOCAL lock_timeout failed, and so did the rollback after it');
-    } finally {
-      client.release();
     }
     throw setErr;
   }

@@ -164,7 +164,9 @@ A migration's DDL (for example `CREATE OR ALTER VIEW`) needs a brief exclusive l
 }
 ```
 
-When a statement can't get its lock in time, it fails, the migration rolls back, and nothing is written to the history table, so a rerun resumes at that migration. Skyway applies it at the start of every migration transaction (`SET LOCK_TIMEOUT` on SQL Server, `SET LOCAL lock_timeout` on PostgreSQL). Unset, nothing changes. `0` means opposite things: SQL Server fails at once, PostgreSQL disables the timeout. Migrations with `executeInTransaction=false` are not covered.
+When a statement can't get its lock in time, it fails, the migration rolls back, and nothing is written to the history table, so a rerun resumes at that migration. Skyway applies it at the start of every migration transaction (`SET LOCK_TIMEOUT` on SQL Server, `SET LOCAL lock_timeout` on PostgreSQL). Unset, nothing changes. The value must be an integer from 1 to 2147483647; anything else is an error when Skyway starts. `0` is rejected because SQL Server reads it as "fail at once" and PostgreSQL as "no timeout"; use `1` to fail at once on both.
+
+Migrations with `executeInTransaction=false` run outside a transaction. On PostgreSQL they never get the lock timeout. On SQL Server, `SET LOCK_TIMEOUT` stays on the session after a transaction ends, so such a migration gets it only if a transactional migration ran before it on the same connection.
 
 ## Migration File Types
 
