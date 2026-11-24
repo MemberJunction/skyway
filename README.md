@@ -152,6 +152,20 @@ Create a `skyway.json` in your project root. Both camelCase and PascalCase keys 
 }
 ```
 
+### Lock Timeout
+
+A migration's DDL (for example `CREATE OR ALTER VIEW`) needs a brief exclusive lock. On a live database, if another query holds a conflicting lock, the migration waits, and every query that arrives after it queues behind it. Set `Database.Options.LockTimeout` (milliseconds) to fail fast instead:
+
+```json
+{
+    "Database": {
+        "Options": { "LockTimeout": 5000 }
+    }
+}
+```
+
+When a statement can't get its lock in time, it fails, the migration rolls back, and nothing is written to the history table, so a rerun resumes at that migration. Skyway applies it at the start of every migration transaction (`SET LOCK_TIMEOUT` on SQL Server, `SET LOCAL lock_timeout` on PostgreSQL). Unset, nothing changes. `0` means opposite things: SQL Server fails at once, PostgreSQL disables the timeout. Migrations with `executeInTransaction=false` are not covered.
+
 ## Migration File Types
 
 Skyway supports the same three migration types as Flyway:

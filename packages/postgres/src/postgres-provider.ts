@@ -19,7 +19,7 @@ import {
 import { DatabaseConfig } from '@memberjunction/skyway-core';
 import { HistoryRecord } from '@memberjunction/skyway-core';
 import { SQLBatch } from '@memberjunction/skyway-core';
-import { validateSqlIdentifier } from '@memberjunction/skyway-core';
+import { validateSqlIdentifier, validateLockTimeout } from '@memberjunction/skyway-core';
 import { SplitPostgresStatements } from './statement-splitter';
 
 /**
@@ -146,9 +146,12 @@ export class PostgresProvider implements DatabaseProvider {
   // ─── Transaction Management ────────────────────────────────────────
 
   async BeginTransaction(): Promise<ProviderTransaction> {
+    const lockTimeout = this.config.Options?.LockTimeout;
+    if (lockTimeout !== undefined) validateLockTimeout(lockTimeout);
     const pool = this.getPool();
     const client = await pool.connect();
     await client.query('BEGIN');
+    if (lockTimeout !== undefined) await applyLockTimeout(client, lockTimeout);
     return new PostgresTransaction(client);
   }
 
@@ -377,6 +380,30 @@ export class PostgresProvider implements DatabaseProvider {
     const client = await pool.connect();
     client.release();
     return pool;
+  }
+}
+
+// ─── Lock timeout ────────────────────────────────────────────────────
+
+/**
+ * Runs `SET LOCAL lock_timeout` on a just-begun transaction. `SET LOCAL`
+ * scopes it to this transaction, so the pooled connection goes back clean.
+ * If the SET fails, the transaction is rolled back and the client released.
+ *
+ * @param ms Already-validated lock timeout in milliseconds.
+ */
+async function applyLockTimeout(client: PoolClient, ms: number): Promise<void> {
+  try {
+    await client.query(`SET LOCAL lock_timeout = '${ms}ms'`);
+  } catch (setErr) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (rollbackErr) {
+      throw new AggregateError([setErr, rollbackErr], 'SET LOCAL lock_timeout failed, and so did the rollback after it');
+    } finally {
+      client.release();
+    }
+    throw setErr;
   }
 }
 

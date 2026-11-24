@@ -9,7 +9,8 @@
  *
  * Integration tests against a real PostgreSQL live separately.
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import type { Pool } from 'pg';
 import { PostgresProvider } from '../postgres-provider';
 import type { DatabaseConfig } from '@memberjunction/skyway-core';
 
@@ -150,5 +151,61 @@ describe('PostgresProvider', () => {
           .rejects.toThrow(/schema identifier/);
       });
     });
+  });
+});
+
+// LockTimeout: a fake pool hands out a fake client that records every query.
+describe('PostgresProvider.BeginTransaction LockTimeout', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function providerWith(lockTimeout: unknown): PostgresProvider {
+    // Cast: the invalid-value tests need values the type forbids, as a JSON config could carry.
+    return new PostgresProvider({ ...baseConfig, Options: { LockTimeout: lockTimeout as number } });
+  }
+
+  function stubPool(provider: PostgresProvider) {
+    const client = {
+      query: vi.fn().mockResolvedValue({ rows: [] }),
+      release: vi.fn(),
+    };
+    const pool = { connect: vi.fn().mockResolvedValue(client) };
+    const getPool = vi.spyOn(provider, 'getPool').mockReturnValue(pool as unknown as Pool);
+    return { getPool, client };
+  }
+
+  it('runs SET LOCAL lock_timeout right after BEGIN when LockTimeout is set', async () => {
+    const provider = providerWith(2000);
+    const { client } = stubPool(provider);
+    await provider.BeginTransaction();
+    expect(client.query.mock.calls).toEqual([['BEGIN'], ["SET LOCAL lock_timeout = '2000ms'"]]);
+  });
+
+  it('runs nothing extra when LockTimeout is unset', async () => {
+    const provider = new PostgresProvider(baseConfig);
+    const { client } = stubPool(provider);
+    await provider.BeginTransaction();
+    expect(client.query.mock.calls).toEqual([['BEGIN']]);
+  });
+
+  it.each([-1, 1.5, "2000'; DROP TABLE x; --"])('throws on invalid LockTimeout %s before touching the pool', async (value) => {
+    const provider = providerWith(value);
+    const { getPool, client } = stubPool(provider);
+    await expect(provider.BeginTransaction()).rejects.toThrow(/LockTimeout must be an integer/);
+    expect(getPool).not.toHaveBeenCalled();
+    expect(client.query).not.toHaveBeenCalled();
+  });
+
+  it('rolls back, releases the client and rethrows when the SET fails', async () => {
+    const provider = providerWith(2000);
+    const { client } = stubPool(provider);
+    client.query.mockImplementation(async (text: string) => {
+      if (text.startsWith('SET LOCAL')) throw new Error('boom');
+      return { rows: [] };
+    });
+    await expect(provider.BeginTransaction()).rejects.toThrow('boom');
+    expect(client.query).toHaveBeenLastCalledWith('ROLLBACK');
+    expect(client.release).toHaveBeenCalledTimes(1);
   });
 });
