@@ -175,6 +175,7 @@ export function LoadConfig(cliOptions: CLIOptions, cwd: string = process.cwd()):
         ?? true,
       Encrypt: fileConfig?.Database?.Options?.Encrypt ?? false,
       RequestTimeout: fileConfig?.Database?.Options?.RequestTimeout ?? 300_000,
+      LockTimeout: fileConfig?.Database?.Options?.LockTimeout,
       SSL: fileConfig?.Database?.Options?.SSL,
     },
   };
@@ -278,6 +279,7 @@ const KEY_MAP: Record<string, string> = {
   trustServerCertificate: 'TrustServerCertificate',
   enableArithAbort: 'EnableArithAbort',
   requestTimeout: 'RequestTimeout',
+  lockTimeout: 'LockTimeout',
   connectionTimeout: 'ConnectionTimeout',
   migrations: 'Migrations',
   locations: 'Locations',
