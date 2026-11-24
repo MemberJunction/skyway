@@ -33,8 +33,22 @@ export interface DatabaseConfig {
   /** Login username */
   User: string;
 
-  /** Login password */
+  /** Login password. Ignored when {@link PasswordProvider} is set. */
   Password: string;
+
+  /**
+   * Supplies the password for each new connection, for a login whose password is a short-lived
+   * token (Microsoft Entra ID, AWS RDS IAM). A migration run can outlast one token, and the
+   * connection Skyway opens later would then present an expired one.
+   *
+   * - PostgreSQL: handed to node-postgres, which calls it every time the pool opens a physical
+   *   connection.
+   * - SQL Server: called each time Skyway connects (to the target database or to `master`).
+   *
+   * When set, {@link Password} is ignored. The caller is responsible for sending a token only over
+   * TLS that verifies the server.
+   */
+  PasswordProvider?: () => Promise<string>;
 
   /** Additional connection options */
   Options?: DatabaseConnectionOptions;

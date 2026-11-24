@@ -353,7 +353,8 @@ export class PostgresProvider implements DatabaseProvider {
       port: this.config.Port ?? 5432,
       database: dbName,
       user: this.config.User,
-      password: this.config.Password,
+      // A PasswordProvider is called by node-postgres for each new physical connection.
+      password: this.config.PasswordProvider ?? this.config.Password,
       max: 1,
       connectionTimeoutMillis: this.config.Options?.ConnectionTimeout ?? 30_000,
       statement_timeout: this.config.Options?.RequestTimeout ?? 300_000,
