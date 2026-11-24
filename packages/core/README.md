@@ -87,6 +87,7 @@ const skyway = new Skyway({
     Options: {
       TrustServerCertificate: true,
       RequestTimeout: 60000,
+      LockTimeout: 5000,       // Optional: fail a migration that waits >5s for a lock
     },
   },
   Migrations: {
