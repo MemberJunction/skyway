@@ -189,9 +189,14 @@ describe('PostgresProvider.BeginTransaction LockTimeout', () => {
     expect(client.query.mock.calls).toEqual([['BEGIN']]);
   });
 
-  it.each([-1, 1.5, "2000'; DROP TABLE x; --"])('throws on invalid LockTimeout %s before touching the pool', async (value) => {
-    const provider = providerWith(value);
+  it.each([0, -1, 1.5, "2000'; DROP TABLE x; --"])('rejects invalid LockTimeout %s when the provider is created', (value) => {
+    expect(() => providerWith(value)).toThrow(/LockTimeout must be an integer from 1/);
+  });
+
+  it('re-checks LockTimeout in BeginTransaction if the config changed after construction', async () => {
+    const provider = providerWith(2000);
     const { getPool, client } = stubPool(provider);
+    provider.Config.Options = { LockTimeout: -1 };
     await expect(provider.BeginTransaction()).rejects.toThrow(/LockTimeout must be an integer/);
     expect(getPool).not.toHaveBeenCalled();
     expect(client.query).not.toHaveBeenCalled();
@@ -207,5 +212,23 @@ describe('PostgresProvider.BeginTransaction LockTimeout', () => {
     await expect(provider.BeginTransaction()).rejects.toThrow('boom');
     expect(client.query).toHaveBeenLastCalledWith('ROLLBACK');
     expect(client.release).toHaveBeenCalledTimes(1);
+    expect(client.release).toHaveBeenCalledWith(false);
+  });
+
+  it('throws an AggregateError and has the pool destroy the client when the SET and ROLLBACK both fail', async () => {
+    const provider = providerWith(2000);
+    const { client } = stubPool(provider);
+    const setErr = new Error('set failed');
+    const rollbackErr = new Error('rollback failed');
+    client.query.mockImplementation(async (text: string) => {
+      if (text.startsWith('SET LOCAL')) throw setErr;
+      if (text === 'ROLLBACK') throw rollbackErr;
+      return { rows: [] };
+    });
+    const caught = await provider.BeginTransaction().catch((err: unknown) => err);
+    expect(caught).toBeInstanceOf(AggregateError);
+    expect((caught as AggregateError).errors).toEqual([setErr, rollbackErr]);
+    // pg-pool removes (destroys) a client released with a truthy argument.
+    expect(client.release).toHaveBeenCalledWith(true);
   });
 });

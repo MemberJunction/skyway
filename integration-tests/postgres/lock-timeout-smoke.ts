@@ -113,8 +113,11 @@ export async function runLockTimeoutSmoke(dbConfig: PostgresConfig): Promise<num
         `Failed after ${elapsed}ms (lock timeout ${LOCK_TIMEOUT_MS}ms, request timeout ${REQUEST_TIMEOUT_MS}ms)`
       );
     } finally {
-      if (holderTxn) await holderTxn.Rollback();
-      await holder.Disconnect();
+      try {
+        if (holderTxn) await holderTxn.Rollback();
+      } finally {
+        await holder.Disconnect();
+      }
     }
 
     // ─── 4. Nothing recorded for V2 ────────────────────────────────

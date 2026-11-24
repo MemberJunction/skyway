@@ -33,6 +33,8 @@ export class SqlServerProvider implements DatabaseProvider {
   private readonly historyProvider: SqlServerHistoryProvider;
 
   constructor(config: DatabaseConfig) {
+    // Fail at startup, not on the first deploy that has a transactional migration.
+    if (config.Options?.LockTimeout !== undefined) validateLockTimeout(config.Options.LockTimeout);
     this.config = config;
     this.historyProvider = new SqlServerHistoryProvider(this);
   }
