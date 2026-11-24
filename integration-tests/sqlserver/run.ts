@@ -9,6 +9,8 @@
  *   4. Re-run Migrate (no-op)
  *   5. Repair (clean state)
  *   6. Clean (drops all objects + history table)
+ *   7. Duplicate-version detection (see duplicate-version-smoke.ts)
+ *   8. LockTimeout (blocked migration fails fast; see lock-timeout-smoke.ts)
  *
  * Reads connection details from env vars so the same script runs in CI
  * (with a service container) or locally:
@@ -29,6 +31,7 @@
 import { Skyway } from '../../packages/core/src/index';
 import { SqlServerProvider } from '../../packages/sqlserver/src/index';
 import { runDuplicateVersionSmoke } from './duplicate-version-smoke';
+import { runLockTimeoutSmoke } from './lock-timeout-smoke';
 
 const DB_CONFIG = {
   Dialect: 'sqlserver' as const,
@@ -118,6 +121,10 @@ async function main() {
     // Phase 7 — Duplicate-version detection (own temp dir, leaves DB clean)
     console.log('\n--- 7. Duplicate-version detection ---');
     failures += await runDuplicateVersionSmoke(DB_CONFIG);
+
+    // Phase 8 — LockTimeout fails a blocked migration fast (own temp dir, leaves DB clean)
+    console.log('\n--- 8. LockTimeout ---');
+    failures += await runLockTimeoutSmoke(DB_CONFIG);
 
     if (failures > 0) {
       console.log(`\n=== FAILED — ${failures} assertion(s) failed ===`);

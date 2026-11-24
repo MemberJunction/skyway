@@ -70,6 +70,25 @@ export interface DatabaseConnectionOptions {
   /** Request timeout in milliseconds. Defaults to 300000 (5 minutes) */
   RequestTimeout?: number;
 
+  /**
+   * Lock wait timeout in milliseconds, applied at the start of every migration
+   * transaction. If a statement can't get a lock within this time it fails and
+   * the migration rolls back, instead of blocking every query queued behind it.
+   * Unset (the default) changes nothing: SQL Server waits forever and
+   * PostgreSQL uses the server's `lock_timeout`.
+   *
+   * Must be an integer from 1 to 2147483647; anything else throws when the
+   * provider is created. `0` is rejected because SQL Server reads it as "fail
+   * at once" and PostgreSQL as "no timeout". Use `1` to fail at once.
+   *
+   * Migrations run with `executeInTransaction=false` skip the transaction.
+   * On PostgreSQL they never get the timeout (`SET LOCAL` ends with the
+   * transaction). On SQL Server `SET LOCK_TIMEOUT` stays on the session after
+   * a transaction ends, so such a migration gets it only if a transactional
+   * migration ran before it on the same connection.
+   */
+  LockTimeout?: number;
+
   /** Connection timeout in milliseconds. Defaults to 30000 (30 seconds) */
   ConnectionTimeout?: number;
 }

@@ -9,6 +9,7 @@
  *   4. Re-run Migrate (no-op)
  *   5. Repair (clean state)
  *   6. Clean (drops all objects + history table)
+ *   7. LockTimeout (blocked migration fails fast; see lock-timeout-smoke.ts)
  *
  * Reads connection details from env vars so the same script runs in CI
  * (with a service container) or locally:
@@ -30,6 +31,7 @@
 
 import { Skyway } from '../../packages/core/src/index';
 import { PostgresProvider } from '../../packages/postgres/src/index';
+import { runLockTimeoutSmoke } from './lock-timeout-smoke';
 
 const DB_CONFIG = {
   Dialect: 'postgresql' as const,
@@ -111,6 +113,10 @@ async function main() {
     check(clean.Success, `Clean succeeded${clean.ErrorMessage ? ` (${clean.ErrorMessage})` : ''}`);
     check(clean.ObjectsDropped > 0, `Clean dropped objects (got ${clean.ObjectsDropped})`);
     for (const obj of clean.DroppedObjects) console.log(`      - ${obj}`);
+
+    // Phase 7 — LockTimeout fails a blocked migration fast (own temp dir, leaves DB clean)
+    console.log('\n--- 7. LockTimeout ---');
+    failures += await runLockTimeoutSmoke(DB_CONFIG);
 
     if (failures > 0) {
       console.log(`\n=== FAILED — ${failures} assertion(s) failed ===`);

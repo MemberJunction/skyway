@@ -19,7 +19,7 @@ import {
 import { DatabaseConfig } from '@memberjunction/skyway-core';
 import { HistoryRecord } from '@memberjunction/skyway-core';
 import { SplitOnGO, SQLBatch } from '@memberjunction/skyway-core';
-import { validateSqlIdentifier } from '@memberjunction/skyway-core';
+import { validateSqlIdentifier, validateLockTimeout } from '@memberjunction/skyway-core';
 
 /**
  * SQL Server provider for Skyway.
@@ -33,6 +33,8 @@ export class SqlServerProvider implements DatabaseProvider {
   private readonly historyProvider: SqlServerHistoryProvider;
 
   constructor(config: DatabaseConfig) {
+    // Fail at startup, not on the first deploy that has a transactional migration.
+    if (config.Options?.LockTimeout !== undefined) validateLockTimeout(config.Options.LockTimeout);
     this.config = config;
     this.historyProvider = new SqlServerHistoryProvider(this);
   }
@@ -154,9 +156,12 @@ export class SqlServerProvider implements DatabaseProvider {
   // ─── Transaction Management ────────────────────────────────────────
 
   async BeginTransaction(): Promise<ProviderTransaction> {
+    const lockTimeout = this.config.Options?.LockTimeout;
+    if (lockTimeout !== undefined) validateLockTimeout(lockTimeout);
     const pool = this.getPool();
     const transaction = new sql.Transaction(pool);
     await transaction.begin();
+    if (lockTimeout !== undefined) await applyLockTimeout(transaction, lockTimeout);
     return new SqlServerTransaction(transaction);
   }
 
@@ -343,6 +348,29 @@ export class SqlServerProvider implements DatabaseProvider {
     const masterPool = new sql.ConnectionPool(mssqlConfig);
     await masterPool.connect();
     return masterPool;
+  }
+}
+
+// ─── Lock timeout ────────────────────────────────────────────────────
+
+/**
+ * Runs `SET LOCK_TIMEOUT` on a just-begun transaction. Uses `batch()` rather
+ * than `query()`: `query()` goes through `sp_executesql`, and a SET made
+ * inside it reverts when that call returns. If the SET fails, the
+ * transaction is rolled back so the pool's only connection isn't left busy.
+ *
+ * @param ms Already-validated lock timeout in milliseconds.
+ */
+async function applyLockTimeout(transaction: sql.Transaction, ms: number): Promise<void> {
+  try {
+    await new sql.Request(transaction).batch(`SET LOCK_TIMEOUT ${ms}`);
+  } catch (setErr) {
+    try {
+      await transaction.rollback();
+    } catch (rollbackErr) {
+      throw new AggregateError([setErr, rollbackErr], 'SET LOCK_TIMEOUT failed, and so did the rollback after it');
+    }
+    throw setErr;
   }
 }
 
