@@ -1,5 +1,16 @@
 # @memberjunction/skyway-postgres
 
+## 0.9.0
+
+### Minor Changes
+
+- 43e1175: A database config can supply `PasswordProvider`, a function that returns the password for each new connection, for a login whose password is a short-lived token (Microsoft Entra ID, AWS RDS IAM). PostgreSQL hands it to node-postgres, which calls it every time the pool opens a physical connection; SQL Server calls it each time Skyway connects. A long migration run therefore no longer presents a token that expired after the first connection opened. `Password` is unchanged and still used when no provider is set.
+
+### Patch Changes
+
+- Updated dependencies [43e1175]
+  - @memberjunction/skyway-core@0.9.0
+
 ## 0.8.0
 
 ### Minor Changes
