@@ -7,7 +7,8 @@
  * is to catch regressions in contract + input validation, not to re-test the
  * driver. Integration testing against a real SQL Server lives separately.
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import * as sql from 'mssql';
 import { SqlServerProvider } from '../sqlserver-provider';
 import type { DatabaseConfig } from '@memberjunction/skyway-core';
 
@@ -148,5 +149,76 @@ describe('SqlServerProvider', () => {
           .rejects.toThrow(/schema identifier/);
       });
     });
+  });
+});
+
+// LockTimeout: stub the driver at the prototype level so BeginTransaction runs
+// without a server, and record what it sends on the transaction.
+describe('SqlServerProvider.BeginTransaction LockTimeout', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function providerWith(lockTimeout: unknown): SqlServerProvider {
+    // Cast: the invalid-value tests need values the type forbids, as a JSON config could carry.
+    return new SqlServerProvider({ ...baseConfig, Options: { LockTimeout: lockTimeout as number } });
+  }
+
+  function stubDriver(provider: SqlServerProvider) {
+    const getPool = vi.spyOn(provider, 'getPool').mockReturnValue({} as sql.ConnectionPool);
+    // vi.spyOn types these against mssql's callback overloads, which return
+    // synchronously; awaiting a plain value behaves the same for the code under test.
+    vi.spyOn(sql.Transaction.prototype, 'begin').mockReturnThis();
+    const rollback = vi.spyOn(sql.Transaction.prototype, 'rollback').mockReturnValue(undefined);
+    const batch = vi.spyOn(sql.Request.prototype, 'batch').mockReturnValue(undefined);
+    return { getPool, rollback, batch };
+  }
+
+  it('runs SET LOCK_TIMEOUT through batch() when LockTimeout is set', async () => {
+    const provider = providerWith(2000);
+    const { batch } = stubDriver(provider);
+    await provider.BeginTransaction();
+    expect(batch).toHaveBeenCalledTimes(1);
+    expect(batch).toHaveBeenCalledWith('SET LOCK_TIMEOUT 2000');
+  });
+
+  it('runs nothing extra when LockTimeout is unset', async () => {
+    const provider = new SqlServerProvider(baseConfig);
+    const { batch } = stubDriver(provider);
+    await provider.BeginTransaction();
+    expect(batch).not.toHaveBeenCalled();
+  });
+
+  it.each([0, -1, 1.5, '2000; DROP TABLE x'])('rejects invalid LockTimeout %s when the provider is created', (value) => {
+    expect(() => providerWith(value)).toThrow(/LockTimeout must be an integer from 1/);
+  });
+
+  it('re-checks LockTimeout in BeginTransaction if the config changed after construction', async () => {
+    const provider = providerWith(2000);
+    const { getPool, batch } = stubDriver(provider);
+    provider.Config.Options = { LockTimeout: -1 };
+    await expect(provider.BeginTransaction()).rejects.toThrow(/LockTimeout must be an integer/);
+    expect(getPool).not.toHaveBeenCalled();
+    expect(batch).not.toHaveBeenCalled();
+  });
+
+  it('rolls back and rethrows when the SET fails', async () => {
+    const provider = providerWith(2000);
+    const { batch, rollback } = stubDriver(provider);
+    batch.mockRejectedValue(new Error('boom'));
+    await expect(provider.BeginTransaction()).rejects.toThrow('boom');
+    expect(rollback).toHaveBeenCalledTimes(1);
+  });
+
+  it('throws an AggregateError with both errors when the SET and the rollback fail', async () => {
+    const provider = providerWith(2000);
+    const { batch, rollback } = stubDriver(provider);
+    const setErr = new Error('set failed');
+    const rollbackErr = new Error('rollback failed');
+    batch.mockRejectedValue(setErr);
+    rollback.mockRejectedValue(rollbackErr);
+    const caught = await provider.BeginTransaction().catch((err: unknown) => err);
+    expect(caught).toBeInstanceOf(AggregateError);
+    expect((caught as AggregateError).errors).toEqual([setErr, rollbackErr]);
   });
 });

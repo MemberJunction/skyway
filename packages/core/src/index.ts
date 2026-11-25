@@ -72,6 +72,7 @@ export {
   SQL_IDENTIFIER_PATTERN,
   SQL_IDENTIFIER_MAX_LENGTH,
 } from './db/identifier';
+export { validateLockTimeout, LOCK_TIMEOUT_MAX_MS } from './db/lock-timeout';
 
 // ─── Migration Types ─────────────────────────────────────────────────
 export {
