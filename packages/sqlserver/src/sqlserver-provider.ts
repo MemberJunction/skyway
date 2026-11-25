@@ -68,7 +68,7 @@ export class SqlServerProvider implements DatabaseProvider {
       server: this.config.Server,
       port: this.config.Port ?? 1433,
       user: this.config.User,
-      password: this.config.Password,
+      password: await this.resolvePassword(),
       database: this.config.Database,
       options: {
         encrypt: this.config.Options?.Encrypt ?? true,
@@ -321,6 +321,11 @@ export class SqlServerProvider implements DatabaseProvider {
     return this.pool;
   }
 
+  /** The password for a new connection: the PasswordProvider's answer when one is set. */
+  private async resolvePassword(): Promise<string> {
+    return this.config.PasswordProvider ? this.config.PasswordProvider() : this.config.Password;
+  }
+
   /**
    * Connects to the SQL Server instance without specifying a database.
    * Used for database-level operations like CREATE DATABASE / DROP DATABASE.
@@ -330,7 +335,7 @@ export class SqlServerProvider implements DatabaseProvider {
       server: this.config.Server,
       port: this.config.Port ?? 1433,
       user: this.config.User,
-      password: this.config.Password,
+      password: await this.resolvePassword(),
       database: 'master',
       options: {
         encrypt: this.config.Options?.Encrypt ?? true,
